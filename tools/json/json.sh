@@ -16,6 +16,7 @@ while [[ -L "$_resolve" ]]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$_resolve")" && pwd)"
 PRETTIFY="$SCRIPT_DIR/prettify.py"
+COLORIZE="$SCRIPT_DIR/colorize.py"
 
 show_help() {
     cat <<'EOF'
@@ -29,12 +30,16 @@ json - JSON 美化工具
 
 特性:
   • 美化结果同时打到 stdout 与剪贴板 (pbcopy)
+  • 终端显示带语法高亮，复制到剪贴板/管道时自动去掉颜色
   • 中文原样保留（不转 \uXXXX）
   • 宽容解析：依次尝试
       1. 严格 JSON
       2. 去注释 / 去尾随逗号 后再解析
       3. Python dict / JS 对象字面量（单引号、True/False/None）
       4. 全部失败时原样输出 + 警告
+
+环境变量:
+  NO_COLOR=1                 强制关闭颜色（遵循 https://no-color.org）
 
 依赖: pbcopy / pbpaste / python3（均 macOS 自带）
 EOF
@@ -87,8 +92,15 @@ errmsg="$(sed -n 's/^err=//p' "$err_file")"
 
 # ========== 输出 + 复制 ==========
 
-printf '%s\n' "$pretty"
+# 剪贴板永远拿无颜色版本
 printf '%s' "$pretty" | pbcopy
+
+# 终端 (TTY) 且未禁用颜色 且解析成功 → 上色显示
+if [[ -t 1 && -z "${NO_COLOR:-}" && "$mode" != "raw" && -f "$COLORIZE" ]]; then
+    printf '%s\n' "$pretty" | python3 "$COLORIZE"
+else
+    printf '%s\n' "$pretty"
+fi
 
 case "$mode" in
     strict)

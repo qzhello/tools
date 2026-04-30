@@ -15,6 +15,7 @@ git clone https://github.com/qzhello/tools.git
 cd tools
 ./install.sh                    # 安装所有工具
 ./install.sh ssh-alias          # 只安装指定工具
+./install.sh --lang en json     # 指定输出语言（默认 cn；en 目前为 stub，未译条目自动回退中文）
 ```
 
 ## 卸载
@@ -23,6 +24,16 @@ cd tools
 ./install.sh --uninstall                # 卸载所有
 ./install.sh --uninstall ssh-alias      # 卸载指定工具
 ```
+
+## 语言支持
+
+`install.sh` 支持 `--lang cn|en`，默认 `cn`：
+
+- 中文：完整翻译
+- 英文：仅留出框架（`MSG_en_*` 变量），翻译为空时自动回退到中文
+- 其他语言：报错退出
+
+要补全英文翻译，编辑 `install.sh` 顶部的 `MSG_en_*` 变量即可。
 
 ## 工具列表
 
