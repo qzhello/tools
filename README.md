@@ -22,7 +22,7 @@ cd tools
 
 | 工具 | 说明 |
 |------|------|
-| [ssh-alias](tools/ssh-alias/) | SSH 快捷登录管理，支持密钥免密和密码登录 |
+| [ssh-alias](tools/ssh-alias/) | SSH 快捷登录管理，密钥免密 / 密码登录（密码加密存于 macOS Keychain） |
 
 ## 如何添加新工具
 

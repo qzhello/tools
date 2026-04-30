@@ -42,11 +42,6 @@ install_tool() {
     # 创建安装目录
     mkdir -p "$INSTALL_DIR"
 
-    # 复制工具目录到安装目录
-    local target_dir="$INSTALL_DIR/$tool_name"
-    mkdir -p "$target_dir"
-    cp -r "$tool_dir"/* "$target_dir/"
-
     # 如果有主脚本，创建符号链接到 PATH
     if [[ -f "$tool_script" ]]; then
         chmod +x "$tool_script"
@@ -63,7 +58,9 @@ install_tool() {
             cat >> "$SHELL_RC" <<EOF
 
 $marker
+TOOL_DIR="$tool_dir"
 source "$source_file"
+unset TOOL_DIR
 # <<< tools/$tool_name <<<
 EOF
             echo "✓ 已添加到 $SHELL_RC"
@@ -96,8 +93,8 @@ uninstall_tool() {
     # 从 rc 文件移除 source 行
     local marker_start="# >>> tools/$tool_name >>>"
     local marker_end="# <<< tools/$tool_name <<<"
-    if grep -qF "$marker_start" "$SHELL_RC"; then
-        sed -i '' "/$marker_start/,/$marker_end/d" "$SHELL_RC"
+    if [[ -f "$SHELL_RC" ]] && grep -qF "$marker_start" "$SHELL_RC"; then
+        sed -i '' "\|$marker_start|,\|$marker_end|d" "$SHELL_RC"
         echo "✓ 已从 $SHELL_RC 移除"
     fi
 
