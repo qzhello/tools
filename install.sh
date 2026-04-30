@@ -50,7 +50,8 @@ install_tool() {
     # 如果有主脚本，创建符号链接到 PATH
     if [[ -f "$tool_script" ]]; then
         chmod +x "$tool_script"
-        ln -sf "$tool_script" "$INSTALL_DIR/$tool_name"
+        rm -f "$INSTALL_DIR/$tool_name"
+        ln -s "$tool_script" "$INSTALL_DIR/$tool_name"
         echo "✓ 已安装命令: $INSTALL_DIR/$tool_name"
     fi
 
