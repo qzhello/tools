@@ -9,9 +9,15 @@ json '{"a":1,"b":[2,3]}'        # 参数（务必单引号包住，避免 shell 
 echo '{"a":1}' | json           # 管道
 curl -s api.example.com | json  # 任何 stdout 都能直接喂
 json                            # 无参：从剪贴板读取
+json path/to/file.json          # 就地美化文件，原文件备份为 .bak
+json path/to/dir/               # 递归美化目录下所有 *.json
+json -n path/to/dir/            # --dry-run：只报告，不写盘
+json --no-backup file.json      # 不生成 .bak
 ```
 
-输出：美化后的 JSON 同时打到 **stdout** 与 **剪贴板**。终端显示带语法高亮（key=青、字符串=绿、数字=黄、布尔/null=红），管道或剪贴板自动去掉颜色。设 `NO_COLOR=1` 可强制关闭颜色。
+**自动判别**：第一个参数是已存在的文件 → 文件模式；是目录 → 目录模式；否则按 JSON 字面量处理。
+
+输出：美化后的 JSON 同时打到 **stdout** 与 **剪贴板**（文件/目录模式不动剪贴板）。终端显示带语法高亮（key=青、字符串=绿、数字=黄、布尔/null=红），管道或剪贴板自动去掉颜色。设 `NO_COLOR=1` 可强制关闭颜色。
 
 ## 宽容解析
 
@@ -22,7 +28,19 @@ json                            # 无参：从剪贴板读取
 | 1 | `strict` | 严格 JSON |
 | 2 | `lenient` | 去掉 `//` `/* */` 注释和尾随逗号后再解析 |
 | 3 | `pyobj` | 当作 Python dict / JS 对象字面量解析（支持单引号、`True`/`False`/`None`） |
-| 4 | `raw` | 全部失败 → 原样写入剪贴板，并提示原始 JSON 错误 |
+| 4 | `raw` | 全部失败 → 原样写入剪贴板，并打印**带行号 + 列箭头**的错误位置 |
+
+解析失败示例：
+
+```
+✗ JSON 解析失败: Expecting property name enclosed in double quotes（行 3，列 5）
+    1 | {
+    2 |   "a": 1,
+  > 3 |     foo,
+            ^ here
+    4 |   "b": 2
+    5 | }
+```
 
 例：
 
