@@ -127,15 +127,15 @@ def main(argv):
     local = dt_utc.astimezone(LOCAL_TZ)
 
     rows = [
+        ("北京时间",    bj.strftime("%Y-%m-%d %H:%M:%S %Z")),
+        ("本地时间",    local.strftime("%Y-%m-%d %H:%M:%S %Z")),
+        ("UTC",         dt_utc.strftime("%Y-%m-%d %H:%M:%S")),
+        ("ISO 8601",    dt_utc.isoformat().replace("+00:00", "Z")),
+        ("RFC 2822",    dt_utc.strftime("%a, %d %b %Y %H:%M:%S +0000")),
+        ("相对",        relative(dt_utc)),
         ("Unix 秒",     f"{int(secs)}"),
         ("Unix 毫秒",   f"{int(secs * 1000)}"),
         ("Unix 微秒",   f"{int(secs * 1_000_000)}"),
-        ("ISO 8601",    dt_utc.isoformat().replace("+00:00", "Z")),
-        ("UTC",         dt_utc.strftime("%Y-%m-%d %H:%M:%S")),
-        ("北京时间",    bj.strftime("%Y-%m-%d %H:%M:%S %Z")),
-        ("本地时间",    local.strftime("%Y-%m-%d %H:%M:%S %Z")),
-        ("RFC 2822",    dt_utc.strftime("%a, %d %b %Y %H:%M:%S +0000")),
-        ("相对",        relative(dt_utc)),
     ]
     # 中文等宽对齐：用显示宽度而非字符数
     def disp_width(s):
