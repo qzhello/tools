@@ -78,8 +78,16 @@ prettify_text() {
     local _err
     _err="$(mktemp)"
 
+    # 我们要把 stderr 捕到文件再回放给用户。prettify.py 看到 stderr
+    # 不是 TTY 就不会输出 ANSI；如果用户最终 stderr 是 TTY 且未禁用颜色，
+    # 强制要求 prettify.py 生成颜色，这样回放出来才有红色高亮。
+    local force_color=""
+    if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+        force_color="JSON_FORCE_COLOR=1"
+    fi
+
     set +e
-    PRETTY="$(printf '%s' "$input" | python3 "$PRETTIFY" 2>"$_err")"
+    PRETTY="$(printf '%s' "$input" | env $force_color python3 "$PRETTIFY" 2>"$_err")"
     PRETTY_RC=$?
     set -e
 
@@ -222,9 +230,15 @@ fi
 
 prettify_text "$input"
 
-# 剪贴板永远拿无颜色版本
-printf '%s' "$PRETTY" | pbcopy
+# 解析失败：只展示错误高亮，不污染 stdout/剪贴板
+if [[ "$MODE" == "raw" ]]; then
+    printf '✗ JSON 解析失败（来源: %s），剪贴板未改动\n' "$src" >&2
+    [[ -n "$ERR_BLOCK" ]] && printf '%s\n' "$ERR_BLOCK" >&2
+    exit 2
+fi
 
+# 解析成功：复制 + 展示
+printf '%s' "$PRETTY" | pbcopy
 emit_pretty
 report_inline_status "$src"
 
