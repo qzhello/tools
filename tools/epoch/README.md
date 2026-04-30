@@ -30,6 +30,44 @@ echo 1714492800 | epoch            # 从管道读
 | `YYYY-MM-DD HH:MM[:SS]` / `YYYY/MM/DD ...` | 日期时间，按本地时区解释 |
 | `YYYY-MM-DD` / `YYYYMMDD` | 日期 |
 
+## 自定义输出（-f）
+
+适合脚本/管道场景：只输出一行无修饰的结果。
+
+```bash
+epoch -f sec                                # 当前 Unix 秒
+epoch -f ms                                 # 当前 Unix 毫秒
+epoch 1714492800 -f iso                     # 2024-04-30T16:00:00Z
+epoch 1714492800 -f date                    # 2024-05-01（默认北京）
+epoch 1714492800 -f date --tz utc           # 2024-04-30
+epoch 1714492800 -f '%Y/%m/%d %H:%M'        # 任意 strftime 字符串
+epoch --list-formats                        # 看所有别名
+```
+
+可用别名：
+
+| 别名 | 默认时区 | 输出 |
+|---|---|---|
+| `iso`       | UTC   | ISO 8601 UTC（`...Z`） |
+| `iso-bj`    | 北京  | ISO 8601 含北京时区 |
+| `iso-local` | 本地  | ISO 8601 含本地时区 |
+| `iso-ms`    | 本地  | ISO 8601 含毫秒+时区 |
+| `rfc`       | UTC   | RFC 2822 |
+| `date`      | 北京  | `YYYY-MM-DD` |
+| `time`      | 北京  | `HH:MM:SS` |
+| `datetime`  | 北京  | `YYYY-MM-DD HH:MM:SS` |
+| `compact`   | 北京  | `YYYYMMDDHHMMSS` |
+| `sec` / `ms` / `us` / `ns` | — | Unix 秒 / 毫秒 / 微秒 / 纳秒 |
+
+也接受任意 `strftime` 字符串。`--tz utc|bj|local` 覆盖默认时区。
+
+脚本里用：
+
+```bash
+NOW_MS=$(epoch -f ms)
+TODAY=$(epoch -f date)
+```
+
 ## 输出
 
 ```
