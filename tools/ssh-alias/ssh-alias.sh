@@ -116,6 +116,18 @@ cmd_rm() {
     fi
 }
 
+cmd_reload() {
+    # 清除当前会话中已有的别名
+    while IFS='|' read -r name target port pass; do
+        [[ -z "$name" || "$name" == \#* ]] && continue
+        unalias "$name" 2>/dev/null
+    done < "$ALIASES_FILE"
+
+    # 重新加载
+    _load_aliases
+    echo "✓ 已重新加载 $(wc -l < "$ALIASES_FILE" | tr -d ' ') 个别名"
+}
+
 cmd_help() {
     cat <<'EOF'
 ssh-alias - SSH 快捷登录管理工具
@@ -124,6 +136,7 @@ ssh-alias - SSH 快捷登录管理工具
   ssh-alias add <名称> <用户@主机> [端口]    添加 SSH 别名
   ssh-alias list                             列出所有别名
   ssh-alias rm <名称>                        删除别名
+  ssh-alias reload                           重新加载配置文件
   ssh-alias help                             显示帮助
 
 示例:
@@ -132,6 +145,7 @@ ssh-alias - SSH 快捷登录管理工具
   myserver                                   直接连接
   ssh-alias list                             查看所有
   ssh-alias rm myserver                      删除
+  ssh-alias reload                           改完配置后重新加载
 
 配置文件: ~/.ssh-aliases.conf
 EOF
@@ -147,6 +161,7 @@ main() {
         add)    cmd_add "$@" ;;
         list|ls) cmd_list ;;
         rm)     cmd_rm "$@" ;;
+        reload) _load_aliases && echo "✓ 已重新加载" ;;
         help|--help|-h) cmd_help ;;
         *)
             echo "未知命令: $cmd"
