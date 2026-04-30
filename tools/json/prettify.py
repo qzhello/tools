@@ -12,32 +12,76 @@ import json
 import ast
 import re
 
-# ANSI（仅当 stderr 是 TTY 时）
-_USE_COLOR = sys.stderr.isatty()
+# ANSI 决策：
+#   1. NO_COLOR 设置 → 关
+#   2. JSON_FORCE_COLOR 设置 → 开
+#   3. 否则看 stderr 是否 TTY
+import os
+_USE_COLOR = (
+    not os.environ.get("NO_COLOR")
+    and (os.environ.get("JSON_FORCE_COLOR") or sys.stderr.isatty())
+)
 RED = "\x1b[1;31m" if _USE_COLOR else ""
 DIM = "\x1b[2m" if _USE_COLOR else ""
 RESET = "\x1b[0m" if _USE_COLOR else ""
 
 
+def _bad_token_span(line: str, col: int) -> tuple:
+    """返回错误位置的 (start, end) 字符索引（半开区间，0-based）。
+
+    word/数字字符向两侧扩展，标点/空白只标 1 个字符。
+    """
+    idx = max(0, min(col - 1, len(line) - 1)) if line else 0
+    if not line:
+        return (0, 1)
+    ch = line[idx]
+    is_word = lambda c: c.isalnum() or c == "_"
+    if is_word(ch):
+        s = idx
+        while s > 0 and is_word(line[s - 1]):
+            s -= 1
+        e = idx
+        while e < len(line) and is_word(line[e]):
+            e += 1
+        return (s, e)
+    return (idx, idx + 1)
+
+
+def _paint_line(line: str, start: int, end: int) -> str:
+    """把 line[start:end] 用红色反白显示。"""
+    if not _USE_COLOR:
+        return line
+    return f"{line[:start]}{RED}{line[start:end]}{RESET}{line[end:]}"
+
+
 def _highlight_error(text: str, exc: json.JSONDecodeError) -> str:
-    """渲染带行号/箭头的错误上下文。"""
+    """渲染带行号/箭头的错误上下文，错误 token 在源码行里也染红。"""
     lines = text.splitlines() or [""]
     lineno = max(1, min(exc.lineno, len(lines)))
     colno = max(1, exc.colno)
 
     # 显示窗口：错误行前后各 2 行
-    start = max(1, lineno - 2)
-    end = min(len(lines), lineno + 2)
-    width = len(str(end))
+    start_ln = max(1, lineno - 2)
+    end_ln = min(len(lines), lineno + 2)
+    width = len(str(end_ln))
 
-    out = []
-    out.append(f"✗ JSON 解析失败: {exc.msg}（行 {exc.lineno}，列 {exc.colno}）")
-    for i in range(start, end + 1):
-        marker = f"{RED}>{RESET}" if i == lineno else " "
-        out.append(f"  {marker} {i:>{width}} | {lines[i-1]}")
+    bad_line = lines[lineno - 1]
+    tok_s, tok_e = _bad_token_span(bad_line, colno)
+    tok_len = max(1, tok_e - tok_s)
+
+    out = [f"✗ JSON 解析失败: {exc.msg}（行 {exc.lineno}，列 {exc.colno}）"]
+    for i in range(start_ln, end_ln + 1):
         if i == lineno:
-            pad = " " * (4 + width + 3 + (colno - 1))
-            out.append(f"{pad}{RED}^{RESET} {DIM}here{RESET}")
+            marker = f"{RED}>{RESET}"
+            shown = _paint_line(bad_line, tok_s, tok_e)
+        else:
+            marker = " "
+            shown = lines[i - 1]
+        out.append(f"  {marker} {i:>{width}} | {shown}")
+        if i == lineno:
+            pad = " " * (4 + width + 3 + tok_s)
+            caret = "^" * tok_len
+            out.append(f"{pad}{RED}{caret}{RESET} {DIM}here{RESET}")
     return "\n".join(out)
 
 
