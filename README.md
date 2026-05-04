@@ -47,6 +47,9 @@ cd tools
 | [dnsx](tools/dnsx/)           | 多 DNS resolver 并行查询对比，差异高亮，排查 CDN/污染/未生效 |
 | [ports](tools/ports/)         | 列出本机监听端口 + 进程，识别常见服务，支持 `-k` 杀进程 |
 | [sizex](tools/sizex/)         | 目录大小可视化，条形图，按大小排序，找谁吃了硬盘 |
+| [procx](tools/procx/)         | 进程查看器，按 CPU/内存排序，颜色高亮，支持进程树和 `-k` 杀进程 |
+| [certx](tools/certx/)         | HTTPS 证书检查，到期天数高亮，SAN/链/TLS 版本一览 |
+| [b64](tools/b64/)             | base64 双向自动识别，支持 url-safe、文件、剪贴板进出 |
 
 ## 如何添加新工具
 
