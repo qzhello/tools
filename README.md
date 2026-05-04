@@ -43,6 +43,10 @@ cd tools
 | [json](tools/json/)           | JSON 美化，结果同时打到 stdout 和剪贴板，支持参数 / 管道 / 剪贴板 / 文件 / 目录 |
 | [epoch](tools/epoch/)         | 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳，一次输出多种格式 |
 | [pingx](tools/pingx/)         | 实时可视化 ping，sparkline 折线 + 丢包率 + min/avg/p95/max 统计 |
+| [tracex](tools/tracex/)       | 可视化路由追踪（mtr 风格），按跳显示丢包率 + 延迟 sparkline |
+| [dnsx](tools/dnsx/)           | 多 DNS resolver 并行查询对比，差异高亮，排查 CDN/污染/未生效 |
+| [ports](tools/ports/)         | 列出本机监听端口 + 进程，识别常见服务，支持 `-k` 杀进程 |
+| [sizex](tools/sizex/)         | 目录大小可视化，条形图，按大小排序，找谁吃了硬盘 |
 
 ## 如何添加新工具
 
