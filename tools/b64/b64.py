@@ -182,13 +182,13 @@ def render_decode(input_text: str, output: bytes, used_charset: str) -> None:
         # 文本：直接展示
         display = text_form if len(text_form) <= 500 else text_form[:500] + f"\n{DIM}... 截断（共 {len(text_form)} 字符，完整内容已入剪贴板）{RESET}"
         rows.append(("结果",  f"{GREEN}{display}{RESET}"))
-        rows.append(("字节数", f"{len(input_text.strip())} → {len(output)} 字节"))
+        rows.append(("长度",  f"{len(input_text.strip())} 字符 (base64) → {len(output)} 字节 (解码)"))
         rows.append(("字符集", "UTF-8"))
     else:
         # 二进制
         kind_str = f"{YELLOW}{kind}{RESET}" if kind else f"{DIM}未知二进制{RESET}"
         rows.append(("类型",  kind_str))
-        rows.append(("字节数", f"{len(input_text.strip())} → {len(output)} 字节"))
+        rows.append(("长度",  f"{len(input_text.strip())} 字符 (base64) → {len(output)} 字节 (解码)"))
         rows.append(("Hex",   hex_dump(output)))
     if "_" in input_text or "-" in input_text:
         rows.append(("变体", "url-safe"))
@@ -209,7 +209,7 @@ def render_encode(input_bytes: bytes, output: str, url_safe: bool) -> None:
 
     rows = [
         ("结果",   f"{GREEN}{output}{RESET}"),
-        ("字节数", f"{len(input_bytes)} → {len(output)}"),
+        ("长度",   f"{len(input_bytes)} 字节 (原始) → {len(output)} 字符 (base64)"),
     ]
     if url_safe:
         rows.append(("变体", "url-safe"))
