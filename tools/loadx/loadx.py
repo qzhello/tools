@@ -602,13 +602,17 @@ def render(
         # 主条按指标定制（堆叠/普通）
         bar = _main_bar(v, snap, net, disk, bat, swap_used, bar_w)
 
-        # sparkline（来自历史）
-        spark = ""
+        # sparkline 固定宽度：保留区永远占 SPARK_W 个 cell，避免推动右侧文字
+        SPARK_W = 12
+        spark_text = ""
         if history:
             key_map = {"CPU": "cpu", "内存": "mem", "网络": "net", "磁盘": "disk", "电池": "bat"}
             key = key_map.get(v.name)
-            if key and history.get(key) and len(history[key]) >= 2:
-                spark = f"  {color}{_sparkline(history[key], 1.0)}{RESET}"
+            if key and history.get(key) and len(history[key]) >= 1:
+                vals = history[key][-SPARK_W:]
+                spark_text = _sparkline(vals, 1.0)
+        spark_padded = spark_text.rjust(SPARK_W)
+        spark = f"  {color}{spark_padded}{RESET}" if history else ""
 
         print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {bar}{spark}  {v.headline}")
 
