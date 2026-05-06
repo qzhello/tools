@@ -499,14 +499,58 @@ def _ljust_w(s: str, width: int) -> str:
 
 _BAR_FILL = "█"
 _BAR_EMPTY = "░"
+# 亚像素：1/8 步进
+_BAR_PARTIALS = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"]
+# Sparkline：每个字符 = 一个采样
+_SPARK = "▁▂▃▄▅▆▇█"
 
 
 def _bar(ratio: float, width: int, color: str = "") -> str:
-    """0..1 → 着色条形图。"""
+    """0..1 → 亚像素精度的着色条形图。"""
     ratio = max(0.0, min(1.0, ratio))
-    filled = int(round(ratio * width))
-    empty = width - filled
-    return f"{color}{_BAR_FILL * filled}{RESET}{DIM}{_BAR_EMPTY * empty}{RESET}"
+    cells = ratio * width
+    full = int(cells)
+    frac = cells - full
+    partial = _BAR_PARTIALS[int(frac * 8)] if frac > 0 and full < width else ""
+    empty_w = width - full - (1 if partial else 0)
+    out = color + _BAR_FILL * full + partial + RESET
+    out += DIM + _BAR_EMPTY * empty_w + RESET
+    return out
+
+
+def _stack_bar(parts: List[Tuple[float, str]], width: int) -> str:
+    """堆叠条：parts = [(ratio, color), ...]，所有 ratio 加起来 ≤ 1。
+    最后一段如果未填满，余下用 dim 空白填充。"""
+    cells: List[Tuple[int, str]] = []
+    used = 0.0
+    used_cells = 0
+    for ratio, color in parts:
+        ratio = max(0.0, min(1.0 - used, ratio))
+        seg_cells = int(round(ratio * width))
+        if used_cells + seg_cells > width:
+            seg_cells = width - used_cells
+        if seg_cells > 0:
+            cells.append((seg_cells, color))
+            used_cells += seg_cells
+        used += ratio
+    out = ""
+    for n, color in cells:
+        out += f"{color}{_BAR_FILL * n}{RESET}"
+    if used_cells < width:
+        out += f"{DIM}{_BAR_EMPTY * (width - used_cells)}{RESET}"
+    return out
+
+
+def _sparkline(values: List[float], max_v: float = 1.0) -> str:
+    """0..max_v 序列 → ▁▂▃▄▅▆▇█ 字符串。"""
+    if not values:
+        return ""
+    out = []
+    for v in values:
+        ratio = max(0.0, min(1.0, v / max_v if max_v > 0 else 0))
+        idx = int(ratio * (len(_SPARK) - 1))
+        out.append(_SPARK[idx])
+    return "".join(out)
 
 
 def _level_color(level: str) -> str:
@@ -525,6 +569,7 @@ def render(
     net: "NetSnap",
     disk: "DiskSnap",
     bat: Optional["BatterySnap"],
+    history: Optional[Dict[str, List[float]]] = None,
 ) -> None:
     # 头部
     title = f"{BOLD}{CYAN}loadx{RESET}"
@@ -543,7 +588,6 @@ def render(
         print(f"\n{GREEN}✓ 整体健康，没看到瓶颈{RESET}")
     print()
 
-    # 各项可视化
     name_w = max(_disp_w(v.name) for v in verdicts)
     bar_w = 30
     proc_bar_w = 20
@@ -552,11 +596,34 @@ def render(
     for v in verdicts:
         color = _level_color(v.level)
         sym = _level_sym(v.level)
-        ratio = _verdict_ratio(v, snap, net, disk, bat)
         name_padded = _ljust_w(v.name, name_w)
-        bar = _bar(ratio, bar_w, color)
-        # 主行：状态符 名字 [bar] headline
-        print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {bar}  {v.headline}")
+
+        # 主条按指标定制（堆叠/普通）
+        bar = _main_bar(v, snap, net, disk, bat, swap_used, bar_w)
+
+        # sparkline（来自历史）
+        spark = ""
+        if history:
+            key_map = {"CPU": "cpu", "内存": "mem", "网络": "net", "磁盘": "disk", "电池": "bat"}
+            key = key_map.get(v.name)
+            if key and history.get(key) and len(history[key]) >= 2:
+                spark = f"  {color}{_sparkline(history[key], 1.0)}{RESET}"
+
+        print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {bar}{spark}  {v.headline}")
+
+        # 内存的图例
+        if v.name == "内存" and snap.phys_total_b:
+            wired = snap.wired_b / snap.phys_total_b
+            comp = snap.compressor_b / snap.phys_total_b
+            other = max(0, (snap.phys_used_b - snap.wired_b - snap.compressor_b) / snap.phys_total_b)
+            free = snap.phys_unused_b / snap.phys_total_b
+            legend = (
+                f"{RED}■{RESET} 内核 {wired*100:.0f}%  "
+                f"{YELLOW}■{RESET} 压缩 {comp*100:.0f}%  "
+                f"{CYAN}■{RESET} 应用 {other*100:.0f}%  "
+                f"{DIM}■ 空闲 {free*100:.0f}%{RESET}"
+            )
+            print(f"     {' ' * name_w}  {legend}")
 
         # Top 3 进程子条
         if v.name == "CPU":
@@ -582,6 +649,47 @@ def render(
         print()
         for t in tips:
             print(f"  {YELLOW}→{RESET} {t}")
+
+
+def _main_bar(
+    v: Verdict,
+    snap: TopSnap,
+    net: "NetSnap",
+    disk: "DiskSnap",
+    bat: Optional["BatterySnap"],
+    swap_used: int,
+    width: int,
+) -> str:
+    color = _level_color(v.level)
+    if v.name == "CPU":
+        # 堆叠：用户(青) + 系统(品红) + 空闲(暗)
+        user = snap.cpu_user / 100
+        sysv = snap.cpu_sys / 100
+        return _stack_bar([(user, CYAN), (sysv, MAG)], width)
+    if v.name == "内存" and snap.phys_total_b:
+        # 堆叠：wired(红) + compressor(黄) + 其他已用(青) + 空闲(暗)
+        total = snap.phys_total_b
+        wired = snap.wired_b / total
+        comp = snap.compressor_b / total
+        other_used = max(0, (snap.phys_used_b - snap.wired_b - snap.compressor_b) / total)
+        return _stack_bar([(wired, RED), (comp, YELLOW), (other_used, CYAN)], width)
+    if v.name == "网络":
+        ratio = (net.in_bps + net.out_bps) / (100 * 1024**2)
+        return _bar(ratio, width, color)
+    if v.name == "磁盘":
+        ratio = disk.bps / (500 * 1024**2)
+        return _bar(ratio, width, color)
+    if v.name == "电池" and bat:
+        # 电池图标风：[████░░] 满则绿，<20% 红，否则按状态
+        pct = bat.pct / 100
+        if bat.pct < 20:
+            c = RED
+        elif bat.on_battery:
+            c = YELLOW
+        else:
+            c = GREEN
+        return _bar(pct, width, c)
+    return _bar(0, width, color)
 
 
 def _proc_color(value: float, hi: float, mid: float) -> str:
@@ -659,8 +767,10 @@ def main() -> int:
     parser.add_argument("--no-disk", action="store_true", help="跳过磁盘采样（更快）")
     args = parser.parse_args()
 
+    history: Dict[str, List[float]] = {"cpu": [], "mem": [], "net": [], "disk": [], "bat": []}
+    HISTORY_MAX = 60
+
     def run_once() -> None:
-        # 并发不便（top -l 2 已经占 1s），简单串行
         hw = sample_hw()
         top = sample_top()
         vm = sample_vm_stat()
@@ -678,7 +788,19 @@ def main() -> int:
         bv = assess_battery(bat)
         if bv:
             verdicts.append(bv)
-        render(verdicts, hw, top, swap_used, net, disk, bat)
+
+        # 记录历史（仅 watch 模式有意义，单次 history 也无害）
+        history["cpu"].append((100 - top.cpu_idle) / 100)
+        history["mem"].append(top.phys_used_b / top.phys_total_b if top.phys_total_b else 0)
+        history["net"].append(min(1.0, (net.in_bps + net.out_bps) / (100 * 1024**2)))
+        history["disk"].append(min(1.0, disk.bps / (500 * 1024**2)))
+        history["bat"].append((bat.pct if bat else 0) / 100)
+        for k in history:
+            if len(history[k]) > HISTORY_MAX:
+                history[k] = history[k][-HISTORY_MAX:]
+
+        render(verdicts, hw, top, swap_used, net, disk, bat,
+               history=history if args.watch else None)
 
     if args.watch:
         try:
@@ -686,7 +808,7 @@ def main() -> int:
                 sys.stdout.write("\x1b[2J\x1b[H")
                 sys.stdout.flush()
                 run_once()
-                print(f"\n{DIM}↻ 每 {args.watch:g}s 刷新（Ctrl-C 退出）{RESET}")
+                print(f"\n{DIM}↻ 每 {args.watch:g}s 刷新  ·  历史 {len(history['cpu'])}/{HISTORY_MAX}（Ctrl-C 退出）{RESET}")
                 time.sleep(args.watch)
         except KeyboardInterrupt:
             print()
