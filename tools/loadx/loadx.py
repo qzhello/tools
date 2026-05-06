@@ -497,35 +497,84 @@ def _ljust_w(s: str, width: int) -> str:
     return s + (" " * pad if pad > 0 else "")
 
 
-def render(verdicts: List[Verdict], hw: HwInfo) -> None:
+_BAR_FILL = "█"
+_BAR_EMPTY = "░"
+
+
+def _bar(ratio: float, width: int, color: str = "") -> str:
+    """0..1 → 着色条形图。"""
+    ratio = max(0.0, min(1.0, ratio))
+    filled = int(round(ratio * width))
+    empty = width - filled
+    return f"{color}{_BAR_FILL * filled}{RESET}{DIM}{_BAR_EMPTY * empty}{RESET}"
+
+
+def _level_color(level: str) -> str:
+    return {"ok": GREEN, "warn": YELLOW, "high": RED}.get(level, "")
+
+
+def _level_sym(level: str) -> str:
+    return {"ok": "✓", "warn": "⚠", "high": "✗"}.get(level, "·")
+
+
+def render(
+    verdicts: List[Verdict],
+    hw: HwInfo,
+    snap: TopSnap,
+    swap_used: int,
+    net: "NetSnap",
+    disk: "DiskSnap",
+    bat: Optional["BatterySnap"],
+) -> None:
     # 头部
-    title = f"{BOLD}loadx{RESET}"
+    title = f"{BOLD}{CYAN}loadx{RESET}"
     if hw.model:
         title += f"  {DIM}{hw.model}{RESET}"
     print(title)
 
-    # 找最大瓶颈（ok 不算）
+    # 一句话结论
     candidates = [v for v in verdicts if v.level != "ok"]
     if candidates:
         worst = max(candidates, key=lambda v: v.score)
-        color = severity_color(worst.level)
-        sym = "⚠" if worst.level == "warn" else "✗"
-        print(f"\n{BOLD}最大瓶颈{RESET}  {color}{sym} {worst.name}{RESET}  {worst.headline}")
-        if worst.detail:
-            print(f"           {DIM}{worst.detail}{RESET}")
+        color = _level_color(worst.level)
+        sym = _level_sym(worst.level)
+        print(f"\n{BOLD}瓶颈{RESET}  {color}{sym} {worst.name}{RESET}  {worst.headline}")
     else:
         print(f"\n{GREEN}✓ 整体健康，没看到瓶颈{RESET}")
     print()
 
-    # 各项明细（按显示宽度对齐）
+    # 各项可视化
     name_w = max(_disp_w(v.name) for v in verdicts)
+    bar_w = 30
+    proc_bar_w = 20
+    proc_name_w = 18
+
     for v in verdicts:
-        color = severity_color(v.level)
-        sym = {"ok": "✓", "warn": "⚠", "high": "✗"}.get(v.level, "·")
+        color = _level_color(v.level)
+        sym = _level_sym(v.level)
+        ratio = _verdict_ratio(v, snap, net, disk, bat)
         name_padded = _ljust_w(v.name, name_w)
-        print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {v.headline}")
-        if v.detail:
-            print(f"     {' ' * name_w}  {DIM}{v.detail}{RESET}")
+        bar = _bar(ratio, bar_w, color)
+        # 主行：状态符 名字 [bar] headline
+        print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {bar}  {v.headline}")
+
+        # Top 3 进程子条
+        if v.name == "CPU":
+            top = sorted(snap.procs, key=lambda p: -p.cpu)[:3]
+            top = [p for p in top if p.cpu > 0.5]
+            for p in top:
+                pname = _ljust_w(_short_name(p.name, proc_name_w), proc_name_w)
+                pbar = _bar(p.cpu / 100, proc_bar_w, _proc_color(p.cpu, 80, 30))
+                print(f"     {' ' * name_w}  {DIM}▏{RESET} {pname} {pbar}  {p.cpu:.0f}%")
+        elif v.name == "内存" and snap.phys_total_b:
+            top = sorted(snap.procs, key=lambda p: -p.mem_kb)[:3]
+            top = [p for p in top if p.mem_kb > 0]
+            max_mem = top[0].mem_kb * 1024 if top else 1
+            for p in top:
+                mb = p.mem_kb * 1024
+                pname = _ljust_w(_short_name(p.name, proc_name_w), proc_name_w)
+                pbar = _bar(mb / max_mem, proc_bar_w, MAG)
+                print(f"     {' ' * name_w}  {DIM}▏{RESET} {pname} {pbar}  {fmt_bytes(mb)}")
 
     # 建议
     tips = _suggest(verdicts)
@@ -533,6 +582,40 @@ def render(verdicts: List[Verdict], hw: HwInfo) -> None:
         print()
         for t in tips:
             print(f"  {YELLOW}→{RESET} {t}")
+
+
+def _proc_color(value: float, hi: float, mid: float) -> str:
+    if value >= hi:
+        return RED
+    if value >= mid:
+        return YELLOW
+    return GREEN
+
+
+def _verdict_ratio(
+    v: Verdict,
+    snap: TopSnap,
+    net: "NetSnap",
+    disk: "DiskSnap",
+    bat: Optional["BatterySnap"],
+) -> float:
+    """每项映射到 0..1 用于画主条。"""
+    if v.name == "CPU":
+        return (100 - snap.cpu_idle) / 100
+    if v.name == "内存":
+        if not snap.phys_total_b:
+            return 0
+        return snap.phys_used_b / snap.phys_total_b
+    if v.name == "网络":
+        # 100 MB/s 满条
+        total = (net.in_bps + net.out_bps) / (100 * 1024**2)
+        return total
+    if v.name == "磁盘":
+        # 500 MB/s 满条
+        return disk.bps / (500 * 1024**2)
+    if v.name == "电池":
+        return (bat.pct if bat else 0) / 100
+    return 0
 
 
 def _suggest(verdicts: List[Verdict]) -> List[str]:
@@ -595,7 +678,7 @@ def main() -> int:
         bv = assess_battery(bat)
         if bv:
             verdicts.append(bv)
-        render(verdicts, hw)
+        render(verdicts, hw, top, swap_used, net, disk, bat)
 
     if args.watch:
         try:
