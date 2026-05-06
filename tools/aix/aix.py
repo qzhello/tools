@@ -902,6 +902,11 @@ def _handle_picker_key(state: TuiState, ch: int) -> None:
 def _tui_main(stdscr, initial_rows: List[Row], initial_tools: List[str]) -> None:
     curses.curs_set(0)
     stdscr.timeout(-1)
+    # Esc 不再等 1s 区分转义序列；25ms 足够区分真正的方向键等
+    try:
+        curses.set_escdelay(25)
+    except (AttributeError, curses.error):
+        os.environ.setdefault("ESCDELAY", "25")
     c = _init_curses_colors()
 
     state = TuiState(rows=initial_rows)
