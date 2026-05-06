@@ -50,7 +50,7 @@ cd tools
 | [procx](tools/procx/)         | 进程查看器，按 CPU/内存排序，颜色高亮，支持进程树和 `-k` 杀进程 |
 | [certx](tools/certx/)         | HTTPS 证书检查，到期天数高亮，SAN/链/TLS 版本一览 |
 | [b64](tools/b64/)             | base64 双向自动识别，支持 url-safe、文件、剪贴板进出 |
-| [top2](tools/top2/)           | 简洁的系统监控 TUI，4 象限（CPU/MEM/NET/DISK）+ 进程列表，单键交互 |
+| [topx](tools/topx/)           | 简洁的系统监控 TUI，4 象限（CPU/MEM/NET/DISK）+ 进程列表，单键交互 |
 
 ## 如何添加新工具
 

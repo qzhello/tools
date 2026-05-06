@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""top2 - 简洁的系统监控 TUI。
+"""topx - 简洁的系统监控 TUI。
 
 四象限：CPU / 内存 / 网络 / 磁盘（sparkline + 实时数值）
 下方：进程列表（可选中、可杀）
 
-数据源全部来自 macOS 自带：top / ps。零外部依赖。
+数据源全部来自 macOS 自带（零外部依赖）：
+  - CPU / 内存 / 负载: `top -l 1 -n 0`
+  - 网络流量:           `netstat -ib`（原始 byte 累计 → 计算速率）
+  - 磁盘 I/O:           `iostat -d -K -w 1 -c 2`（每秒采样）
+  - 进程列表:           `ps -eo ...`
 """
 
 from __future__ import annotations
@@ -69,8 +73,6 @@ def parse_top() -> Dict:
         "cpu_user": 0.0, "cpu_sys": 0.0, "cpu_idle": 100.0,
         "load1": 0.0, "load5": 0.0, "load15": 0.0,
         "mem_used": 0, "mem_total": 1, "mem_wired": 0,
-        "net_in": 0, "net_out": 0,
-        "disk_r": 0, "disk_w": 0,
         "proc_total": 0, "proc_running": 0,
     }
 
@@ -101,28 +103,77 @@ def parse_top() -> Dict:
         raw["mem_total"] = used + unused
         raw["mem_wired"] = wired
 
-    m = re.search(
-        r"Networks:\s*packets:\s*\d+/([\d.]+[KMGT]?)\s*in,\s*\d+/([\d.]+[KMGT]?)\s*out",
-        out,
-    )
-    if m:
-        raw["net_in"] = parse_size(m.group(1))
-        raw["net_out"] = parse_size(m.group(2))
-
-    m = re.search(
-        r"Disks:\s*\d+/([\d.]+[KMGT]?)\s*read,\s*\d+/([\d.]+[KMGT]?)\s*written",
-        out,
-    )
-    if m:
-        raw["disk_r"] = parse_size(m.group(1))
-        raw["disk_w"] = parse_size(m.group(2))
-
     m = re.search(r"Processes:\s*(\d+)\s*total,\s*(\d+)\s*running", out)
     if m:
         raw["proc_total"] = int(m.group(1))
         raw["proc_running"] = int(m.group(2))
 
     return raw
+
+
+def parse_netstat() -> Tuple[int, int]:
+    """返回 (总入字节, 总出字节)，跨所有非 loopback 接口求和。
+
+    netstat -ib 输出每个接口可能多行（不同协议），但字节计数同。
+    我们只取 Network 字段以 '<Link#' 开头的那一行（聚合行），且排除 lo*。
+    """
+    try:
+        proc = subprocess.run(
+            ["netstat", "-ib"], capture_output=True, check=False, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 0, 0
+    out = proc.stdout.decode("utf-8", errors="replace")
+    total_in = 0
+    total_out = 0
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+        name = parts[0].rstrip("*")
+        network = parts[2]
+        if name.startswith("lo"):
+            continue
+        if not network.startswith("<Link#"):
+            continue  # 跳过同一接口的协议子行
+        try:
+            ibytes = int(parts[6])
+            obytes = int(parts[9])
+        except (ValueError, IndexError):
+            continue
+        total_in += ibytes
+        total_out += obytes
+    return total_in, total_out
+
+
+def parse_iostat_once(timeout: float = 3.0) -> Tuple[float, float]:
+    """单次采样磁盘 I/O，返回 (读 字节/秒, 写 字节/秒)。
+
+    macOS iostat 不区分读写（默认只输出 MB/s 总量），
+    我们用 `-d -K -w 1 -c 2` 强制采样 1 秒，第二行就是该秒的实际 MB/s。
+
+    返回值约定：read = total throughput, write = 0（macOS 不区分）。
+    """
+    try:
+        proc = subprocess.run(
+            ["iostat", "-d", "-K", "-w", "1", "-c", "2"],
+            capture_output=True, check=False, timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return 0.0, 0.0
+    out = proc.stdout.decode("utf-8", errors="replace")
+    lines = [l for l in out.splitlines() if l.strip()]
+    # 找到最后一行数据（包含数字）
+    data_lines = [l for l in lines if re.match(r"^\s*[\d.]", l)]
+    if len(data_lines) < 2:
+        return 0.0, 0.0
+    # 取最后一行（per-second 采样）
+    nums = [float(x) for x in data_lines[-1].split() if re.fullmatch(r"[\d.]+", x)]
+    # 每个 disk 是 3 列：KB/t, tps, MB/s。我们要每个 disk 的第 3 个数（MB/s）
+    total_mbps = 0.0
+    for i in range(2, len(nums), 3):
+        total_mbps += nums[i]
+    return total_mbps * 1024 ** 2, 0.0  # MB → bytes
 
 
 def parse_ps() -> List[Dict]:
@@ -192,29 +243,33 @@ class State:
         self.proc_interval = 2.0  # 进程列表每 2s 刷新一次（ps 较慢）
 
     def update_sys(self, raw: Dict) -> None:
-        now = time.monotonic()
+        """更新 CPU / 内存（来自 top -l 1）。"""
         self.cur = raw
         self.cpu_hist.append(raw["cpu_user"] + raw["cpu_sys"])
         if raw["mem_total"]:
             self.mem_hist.append(100 * raw["mem_used"] / raw["mem_total"])
 
-        if self.last_t is not None:
+    def update_net(self, in_bytes: int, out_bytes: int) -> None:
+        """更新网络速率（基于两次采样差）。"""
+        now = time.monotonic()
+        if self.last_t is not None and self.last_net_in:
             dt = now - self.last_t
             if dt > 0:
-                self.net_in_rate = max(0.0, (raw["net_in"] - self.last_net_in) / dt)
-                self.net_out_rate = max(0.0, (raw["net_out"] - self.last_net_out) / dt)
-                self.disk_r_rate = max(0.0, (raw["disk_r"] - self.last_disk_r) / dt)
-                self.disk_w_rate = max(0.0, (raw["disk_w"] - self.last_disk_w) / dt)
+                self.net_in_rate = max(0.0, (in_bytes - self.last_net_in) / dt)
+                self.net_out_rate = max(0.0, (out_bytes - self.last_net_out) / dt)
                 self.net_in_hist.append(self.net_in_rate)
                 self.net_out_hist.append(self.net_out_rate)
-                self.disk_r_hist.append(self.disk_r_rate)
-                self.disk_w_hist.append(self.disk_w_rate)
-
         self.last_t = now
-        self.last_net_in = raw["net_in"]
-        self.last_net_out = raw["net_out"]
-        self.last_disk_r = raw["disk_r"]
-        self.last_disk_w = raw["disk_w"]
+        self.last_net_in = in_bytes
+        self.last_net_out = out_bytes
+
+    def update_disk(self, r_bps: float, w_bps: float) -> None:
+        """更新磁盘速率（iostat 直接给出 per-second 值）。"""
+        self.disk_r_rate = r_bps
+        self.disk_w_rate = w_bps
+        self.disk_r_hist.append(r_bps)
+        if w_bps > 0:
+            self.disk_w_hist.append(w_bps)
 
     def update_procs(self) -> None:
         self.procs = parse_ps()
@@ -443,21 +498,18 @@ def draw_panel_net(stdscr, y: int, x: int, h: int, w: int, st: State) -> None:
 
 
 def draw_panel_disk(stdscr, y: int, x: int, h: int, w: int, st: State) -> None:
-    draw_box(stdscr, y, x, h, w, "DISK")
+    draw_box(stdscr, y, x, h, w, "DISK I/O")
     inner_w = w - 4
     cy = y + 1
     cx = x + 2
-    rate_r = st.disk_r_rate
-    rate_w = st.disk_w_rate
-    safe_addstr(stdscr, cy, cx,
-                f"R {humanize_rate(rate_r):>10}", col("cyan"))
-    safe_addstr(stdscr, cy + 1, cx,
-                f"W {humanize_rate(rate_w):>10}", col("magenta"))
-    if h >= 5:
-        spark_r = sparkline(st.disk_r_hist, inner_w)
-        spark_w = sparkline(st.disk_w_hist, inner_w)
-        safe_addstr(stdscr, y + h - 3, cx, spark_r, col("cyan"))
-        safe_addstr(stdscr, y + h - 2, cx, spark_w, col("magenta"))
+    # macOS 的 iostat 不区分读 / 写，这里显示总吞吐
+    rate = st.disk_r_rate
+    safe_addstr(stdscr, cy, cx, f"  {humanize_rate(rate):>12}",
+                curses.A_BOLD | col("cyan"))
+    safe_addstr(stdscr, cy + 1, cx, "总吞吐（读+写）", curses.A_DIM)
+    if h >= 4:
+        spark = sparkline(st.disk_r_hist, inner_w)
+        safe_addstr(stdscr, y + h - 2, cx, spark, col("cyan"))
 
 
 def draw_processes(stdscr, y: int, x: int, h: int, w: int, st: State) -> None:
@@ -532,7 +584,7 @@ def draw_title(stdscr, w: int, st: State) -> None:
     n_procs = st.cur.get("proc_total", 0) if st.cur else 0
     pause = " [PAUSED]" if st.paused else ""
     flt = f"  filter: {st.filter_text}" if st.filter_text else ""
-    title = f" top2  {n_procs} procs  排序: {st.sort_key}{flt}{pause} "
+    title = f" topx  {n_procs} procs  排序: {st.sort_key}{flt}{pause} "
     safe_addnstr(stdscr, 0, 0, title.ljust(w - 1), w - 1,
                  curses.A_REVERSE | curses.A_BOLD)
 
@@ -552,7 +604,7 @@ def draw_footer(stdscr, h: int, w: int, st: State) -> None:
 def draw_help(stdscr) -> None:
     h, w = stdscr.getmaxyx()
     lines = [
-        "── top2 帮助 ──",
+        "── topx 帮助 ──",
         "",
         "  q / Esc       退出",
         "  Space         暂停 / 恢复刷新",
@@ -647,22 +699,41 @@ def filter_input(stdscr, st: State) -> None:
 # ──────────────── 主循环 ────────────────
 
 
+def _wait(stop: threading.Event, secs: float) -> None:
+    """分段 sleep，便于及时响应 stop event。"""
+    slept = 0.0
+    while slept < secs and not stop.is_set():
+        time.sleep(min(0.1, secs - slept))
+        slept += 0.1
+
+
 def _sys_collector(st: State, stop: threading.Event, interval: float) -> None:
-    """后台线程：周期性采集系统数据，写入 state（带锁）。"""
+    """采集 CPU / 内存（top）+ 网络字节计数（netstat）。"""
     while not stop.is_set():
         if not st.paused:
             try:
                 raw = parse_top()
+                in_b, out_b = parse_netstat()
                 with st.lock:
                     st.update_sys(raw)
+                    st.update_net(in_b, out_b)
             except Exception as e:
                 st.set_flash(f"采集失败: {e}")
-        # 分小段 sleep，便于及时响应 stop
-        slept = 0.0
-        step = 0.1
-        while slept < interval and not stop.is_set():
-            time.sleep(step)
-            slept += step
+        _wait(stop, interval)
+
+
+def _disk_collector(st: State, stop: threading.Event) -> None:
+    """采集磁盘 I/O。iostat -w 1 -c 2 自身阻塞 ~1s，相当于 1Hz 采样。"""
+    while not stop.is_set():
+        if not st.paused:
+            try:
+                r_bps, w_bps = parse_iostat_once()
+                with st.lock:
+                    st.update_disk(r_bps, w_bps)
+            except Exception:
+                pass
+        else:
+            _wait(stop, 0.5)
 
 
 def _proc_collector(st: State, stop: threading.Event, interval: float) -> None:
@@ -693,9 +764,12 @@ def tui_main(stdscr, args) -> None:
     stop = threading.Event()
     t_sys = threading.Thread(target=_sys_collector,
                              args=(st, stop, args.interval), daemon=True)
+    t_disk = threading.Thread(target=_disk_collector,
+                              args=(st, stop), daemon=True)
     t_proc = threading.Thread(target=_proc_collector,
                               args=(st, stop, max(args.interval * 2, 1.5)), daemon=True)
     t_sys.start()
+    t_disk.start()
     t_proc.start()
 
     # 等首次采集完成
@@ -710,8 +784,9 @@ def tui_main(stdscr, args) -> None:
         _run_event_loop(stdscr, st)
     finally:
         stop.set()
-        # 给线程 0.5s 收尾
+        # 给线程一点时间收尾（disk 线程可能在 iostat 阻塞中，最多等 ~1.5s）
         t_sys.join(timeout=0.5)
+        t_disk.join(timeout=2.0)
         t_proc.join(timeout=0.5)
 
 
@@ -802,7 +877,7 @@ def _run_event_loop(stdscr, st: State) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="top2",
+        prog="topx",
         description="简洁的系统监控 TUI（CPU/MEM/NET/DISK + 进程列表）",
     )
     p.add_argument("-i", "--interval", type=float, default=1.0,
