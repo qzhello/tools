@@ -236,19 +236,59 @@ def find_binary(name: str, entries: List[Entry]) -> List[Tuple[int, str, str]]:
 
 # ---------- 渲染 ----------
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _disp_w(s: str) -> int:
+    bare = _ANSI_RE.sub("", s)
+    w = 0
+    for ch in bare:
+        w += 2 if ord(ch) > 0x2E80 else 1
+    return w
+
+
+def _ljust_w(s: str, width: int) -> str:
+    pad = width - _disp_w(s)
+    return s + (" " * pad if pad > 0 else "")
+
+
+def _rjust_w(s: str, width: int) -> str:
+    pad = width - _disp_w(s)
+    return (" " * pad if pad > 0 else "") + s
+
+
+def _short_home(s: str) -> str:
+    home = str(Path.home())
+    return s.replace(home, "~") if s.startswith(home) else s
+
+
+def _status_for(e: Entry) -> Tuple[str, str]:
+    """返回 (符号, 颜色)"""
+    if e.expanded.startswith("("):
+        return ("!", RED)
+    if not e.exists or not e.is_dir:
+        return ("✗", RED)
+    if e.duplicate_of:
+        return ("⚠", YELLOW)
+    if not e.readable:
+        return ("⚠", YELLOW)
+    return ("✓", GREEN)
+
+
 def render_list(entries: List[Entry], filter_mode: Optional[str]) -> int:
     total = len(entries)
     n_dup = sum(1 for e in entries if e.duplicate_of)
     n_missing = sum(1 for e in entries if not e.exists or not e.is_dir)
     n_empty = sum(1 for e in entries if e.expanded.startswith("("))
 
-    print(f"{BOLD}pathx{RESET}  $PATH 共 {total} 项"
-          f"（{YELLOW if n_dup else DIM}{n_dup} 重复{RESET}，"
-          f"{RED if n_missing else DIM}{n_missing} 不存在{RESET}"
-          f"{f', {RED}{n_empty} 空条目（=cwd，危险）{RESET}' if n_empty else ''}）")
+    parts = [f"{BOLD}{total}{RESET} 项"]
+    parts.append(f"{(YELLOW if n_dup else DIM)}{n_dup} 重复{RESET}")
+    parts.append(f"{(RED if n_missing else DIM)}{n_missing} 不存在{RESET}")
+    if n_empty:
+        parts.append(f"{RED}{n_empty} 空条目（=cwd，危险）{RESET}")
+    print(f"{CYAN}{BOLD}$PATH{RESET}  " + f"  {DIM}·{RESET}  ".join(parts))
     print()
 
-    # 按 filter 选条目
     selected = []
     for e in entries:
         if filter_mode == "dup" and not e.duplicate_of:
@@ -261,86 +301,111 @@ def render_list(entries: List[Entry], filter_mode: Optional[str]) -> int:
         print(f"{DIM}(无匹配条目){RESET}")
         return 0
 
-    # 计算列宽
-    path_w = min(60, max(len(e.expanded) for e in selected))
-    print(f"{DIM}  #   状态   {'目录':<{path_w - 2}}  {'binary':>7}  来源{RESET}")
-    print(f"{DIM}{'─' * (4 + 8 + path_w + 11 + 30)}{RESET}")
+    # 列宽（按显示宽度算）
+    home = str(Path.home())
+    paths = [_short_home(e.expanded if e.expanded else e.raw or "(empty)") for e in selected]
+    path_w = min(60, max(_disp_w(p) for p in paths))
+    idx_w = max(3, len(f"#{max(e.index for e in selected)}"))
+    n_w = max(3, len(str(max((e.bin_count for e in selected if e.bin_count), default=0))))
 
-    for e in selected:
-        if not e.exists:
-            status = f"{RED}✗ 缺{RESET}"
-        elif not e.is_dir:
-            status = f"{RED}✗ 非目录{RESET}"
-        elif e.duplicate_of:
-            status = f"{YELLOW}⚠ 重{RESET}"
-        elif not e.readable:
-            status = f"{YELLOW}⚠ 不可读{RESET}"
-        elif e.expanded.startswith("("):
-            status = f"{RED}⚠ 危{RESET}"
-        else:
-            status = f"{GREEN}✓{RESET}   "
+    # 表头
+    header = (
+        f"  {DIM}{_ljust_w('', 1)} "
+        f"{_ljust_w('#', idx_w)}  "
+        f"{_ljust_w('目录', path_w)}  "
+        f"{_rjust_w('命令', n_w)}  "
+        f"来源{RESET}"
+    )
+    print(header)
+    print(f"{DIM}{'─' * (2 + 1 + 1 + idx_w + 2 + path_w + 2 + n_w + 2 + 24)}{RESET}")
 
-        path_disp = e.expanded if e.expanded else e.raw or "(empty)"
-        if len(path_disp) > path_w:
-            path_disp = "…" + path_disp[-(path_w - 1):]
+    for e, path_disp in zip(selected, paths):
+        if _disp_w(path_disp) > path_w:
+            # 截断保留尾部
+            while _disp_w(path_disp) > path_w - 1:
+                path_disp = path_disp[1:]
+            path_disp = "…" + path_disp
 
-        bin_part = ""
+        sym, color = _status_for(e)
+        status = f"{color}{sym}{RESET}"
+
+        idx_str = f"{color}#{e.index}{RESET}"
+
         if e.duplicate_of:
-            bin_part = f"{DIM}=#{e.duplicate_of}{RESET}"
-        elif e.exists and e.is_dir:
-            bin_part = f"{e.bin_count}"
+            n_str = f"{YELLOW}=#{e.duplicate_of}{RESET}"
+            path_color = DIM
+        elif not e.exists or not e.is_dir:
+            n_str = f"{DIM}-{RESET}"
+            path_color = DIM + RED
         else:
-            bin_part = f"{DIM}-{RESET}"
+            n_str = f"{e.bin_count}"
+            path_color = ""
 
-        src_part = ""
+        src_str = ""
         if e.sources:
-            shown = e.sources[0]
-            # 缩短 home
-            home = str(Path.home())
-            shown = shown.replace(home, "~")
+            first = _short_home(e.sources[0])
+            src_str = f"{DIM}{first}{RESET}"
             if len(e.sources) > 1:
-                shown += f" {DIM}(+{len(e.sources) - 1}){RESET}"
-            src_part = f"{DIM}{shown}{RESET}"
+                src_str += f"{DIM} +{len(e.sources) - 1}{RESET}"
 
-        print(f"  {e.index:>2}  {status}   "
-              f"{path_disp:<{path_w}}  "
-              f"{bin_part:>7}  "
-              f"{src_part}")
+        print(
+            f"  {status} "
+            f"{_ljust_w(idx_str, idx_w)}  "
+            f"{_ljust_w(path_color + path_disp + RESET, path_w)}  "
+            f"{_rjust_w(n_str, n_w)}  "
+            f"{src_str}"
+        )
 
     return 0
 
 
-def render_shadows(shadows: Dict[str, List[Tuple[int, str]]]) -> None:
+def render_shadows(shadows: Dict[str, List[Tuple[int, str]]], limit: int = 0) -> None:
     if not shadows:
         return
     print()
-    print(f"{BOLD}遮蔽：{RESET}{len(shadows)} 个同名 binary 出现在多个目录")
-    name_w = min(20, max(len(n) for n in shadows))
-    # 按出现次数倒序
-    for name in sorted(shadows, key=lambda k: (-len(shadows[k]), k)):
-        paths = shadows[name]
-        winner_idx, winner_path = paths[0]
-        rest = paths[1:]
-        print(f"  {CYAN}{name:<{name_w}}{RESET}  "
-              f"{GREEN}#{winner_idx} {winner_path}{RESET}")
-        for idx, p in rest:
-            print(f"  {' ' * name_w}  {DIM}#{idx} {p}{RESET}")
+    total = len(shadows)
+    items = sorted(shadows.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    shown = items if limit <= 0 else items[:limit]
+
+    title = f"{BOLD}遮蔽{RESET}  {total} 个命令同名出现在多个目录"
+    if limit > 0 and total > limit:
+        title += f"  {DIM}（仅显示前 {limit}，--shadows 看全部）{RESET}"
+    print(title)
+    print()
+
+    name_w = min(20, max(_disp_w(n) for n, _ in shown))
+    for name, paths in shown:
+        winner_idx, winner_full = paths[0]
+        winner_dir = os.path.dirname(winner_full)
+        winner_dir = _short_home(winner_dir)
+        shadow_idxs = ",".join(f"#{p[0]}" for p in paths[1:])
+        print(
+            f"  {CYAN}{_ljust_w(name, name_w)}{RESET}  "
+            f"{GREEN}#{winner_idx}{RESET} {winner_dir}  "
+            f"{DIM}← 被 {shadow_idxs} 遮{RESET}"
+        )
 
 
 def render_find(name: str, matches: List[Tuple[int, str, str]]) -> int:
     if not matches:
-        print(f"{RED}✗ 在 PATH 中找不到 {name}{RESET}")
+        print(f"{RED}✗{RESET} 在 PATH 中找不到 {BOLD}{name}{RESET}")
         return 1
-    print(f"{BOLD}{name}{RESET}：找到 {len(matches)} 处")
+    print(f"{CYAN}{BOLD}{name}{RESET}  {DIM}找到 {len(matches)} 处{RESET}")
+    print()
     for i, (idx, full, real) in enumerate(matches):
-        marker = f"{GREEN}✓ 生效{RESET}" if i == 0 else f"{DIM}· 被遮{RESET}"
-        link = ""
+        if i == 0:
+            sym = f"{GREEN}✓{RESET}"
+            tag = f"{GREEN}生效{RESET}"
+            path_color = ""
+        else:
+            sym = f"{DIM}·{RESET}"
+            tag = f"{DIM}被遮{RESET}"
+            path_color = DIM
+        idx_str = f"#{idx}"
+        print(f"  {sym} {tag}  {YELLOW}{idx_str:<4}{RESET}  {path_color}{full}{RESET}")
         if real != full:
-            home = str(Path.home())
-            real_disp = real.replace(home, "~") if real.startswith(home) else real
-            link = f"  {DIM}→ {real_disp}{RESET}"
-        full_disp = full
-        print(f"  {marker}  {YELLOW}#{idx}{RESET}  {full_disp}{link}")
+            real_disp = _short_home(real)
+            print(f"        {DIM}→ {real_disp}{RESET}")
     return 0
 
 
@@ -406,10 +471,10 @@ def main() -> int:
 
     render_list(entries, filter_mode)
 
-    # 末尾自动追加 shadows（不加 filter 时）
+    # 末尾自动追加 shadows（不加 filter 时；只显示前 10）
     if filter_mode is None:
         shadows = find_shadows(entries)
-        render_shadows(shadows)
+        render_shadows(shadows, limit=10)
 
     if args.check:
         n_dup = sum(1 for e in entries if e.duplicate_of)
