@@ -8,21 +8,112 @@
 - ✅ **Linux**：基本支持，部分工具的密码模式（依赖 macOS Keychain）不可用
 - ❌ **Windows**：不支持。如需使用，请在 WSL2 内按 Linux 方式安装
 
+## 前置依赖
+
+所有工具都用 **Python 3.9+** 编写（部分用到 `zoneinfo`、`dataclasses` 等特性），bash 只做环境处理。除此之外，少数工具会调用系统命令。
+
+### Python
+
+需要 **Python 3.9 或更高版本**。
+
+```bash
+python3 --version    # 检查；< 3.9 请升级
+```
+
+| 平台 | 安装方式 |
+|------|----------|
+| macOS（推荐） | `brew install python@3.12` |
+| macOS（自带）| 系统已带 `python3`，但版本可能较老（< 3.9 时部分工具异常）|
+| Ubuntu/Debian | `sudo apt install python3 python3-venv` |
+| Fedora/CentOS | `sudo dnf install python3` |
+
+### 系统命令
+
+| 工具 | 依赖的系统命令 | macOS | Linux 安装 |
+|------|---------------|-------|-----------|
+| ssh-alias | `ssh`, `security`(Keychain) | 自带 | `apt install openssh-client`（密码模式不可用：依赖 macOS Keychain） |
+| json      | （无）                       | -     | -          |
+| epoch     | （无；剪贴板模式需 `pbpaste`） | 自带 | 剪贴板模式不可用 |
+| pingx     | `ping`                       | 自带 | 自带       |
+| tracex    | `traceroute`                 | 自带 | `apt install traceroute` |
+| dnsx      | `dig`                        | 自带 | `apt install dnsutils` |
+| ports     | `lsof`                       | 自带 | `apt install lsof` |
+| sizex     | （无）                       | -     | -          |
+| procx     | `ps`                         | 自带 | 自带       |
+| certx     | `openssl`                    | 自带 | `apt install openssl` |
+| b64       | `pbcopy`/`pbpaste`（仅剪贴板模式）| 自带 | 剪贴板模式需 `xclip` 或 `wl-copy`（当前仅 macOS 支持） |
+| topx      | `top`, `ps`, `netstat`, `iostat` | 自带 | `apt install net-tools sysstat` |
+
+### 一键安装前置（参考）
+
+**macOS**（系统都自带，只需要 Python）：
+
+```bash
+# 已有 brew 时
+brew install python@3.12
+```
+
+**Ubuntu / Debian**：
+
+```bash
+sudo apt update
+sudo apt install -y \
+    python3 python3-venv \
+    openssh-client openssl \
+    iproute2 net-tools dnsutils sysstat \
+    lsof traceroute iputils-ping
+```
+
+**Fedora / CentOS / RHEL**：
+
+```bash
+sudo dnf install -y \
+    python3 \
+    openssh-clients openssl \
+    net-tools bind-utils sysstat \
+    lsof traceroute iputils
+```
+
 ## 安装
 
 ```bash
 git clone https://github.com/qzhello/tools.git
 cd tools
 ./install.sh                    # 安装所有工具
-./install.sh ssh-alias          # 只安装指定工具
-./install.sh --lang en json     # 指定输出语言（默认 cn；en 目前为 stub，未译条目自动回退中文）
+./install.sh ssh-alias json     # 安装指定工具
+./install.sh --lang en json     # 指定输出语言（默认 cn）
 ```
 
-## 卸载
+会自动：
+
+1. 把每个工具的命令软链到 `~/.local/bin/<tool>`
+2. 把 `~/.local/bin` 加入你的 `PATH`（写入 `~/.zshrc` 或 `~/.bashrc`）
+3. 有 `source.sh` 的工具（如 `ssh-alias`）追加 source 行到 shell rc
+
+安装后执行 `source ~/.zshrc`（或重开终端）生效。
+
+## 常用命令
 
 ```bash
+./install.sh list                       # 列出所有工具及安装状态
+./install.sh --help                     # 完整帮助
+./install.sh <tool> [<tool> ...]        # 安装一个或多个工具
 ./install.sh --uninstall                # 卸载所有
-./install.sh --uninstall ssh-alias      # 卸载指定工具
+./install.sh --uninstall <tool>         # 卸载指定工具
+```
+
+`./install.sh list` 输出示例：
+
+```
+可用工具（共 12 个，已安装 9）
+
+✓ b64        base64 双向自动识别，支持 url-safe / 文件 / 剪贴板进出
+✓ certx      HTTPS 证书检查，到期天数 + SAN + 链 + TLS 版本
+- dnsx       多 resolver DNS 对比查询，差异高亮（CDN/污染/未生效排查）
+✓ epoch      时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳
+...
+
+✓ 已安装   - 未安装
 ```
 
 ## 语言支持
@@ -55,7 +146,7 @@ cd tools
 ## 如何添加新工具
 
 1. 在 `tools/` 下新建目录，例如 `tools/my-tool/`
-2. 创建主脚本 `tools/my-tool/my-tool.sh`（chmod +x）
+2. 创建主脚本 `tools/my-tool/my-tool.sh`（chmod +x），第二行写一句话描述：`# my-tool - 描述...`
 3. 如果需要 shell 启动时自动加载，创建 `tools/my-tool/source.sh`
 4. 运行 `./install.sh my-tool` 即可安装
 

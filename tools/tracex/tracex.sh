@@ -1,5 +1,5 @@
 #!/bin/bash
-# tracex - 可视化路由追踪。bash 仅做环境处理；逻辑在 python。
+# tracex - 可视化路由追踪（mtr 风格），按跳显示丢包率 + 延迟 sparkline
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8

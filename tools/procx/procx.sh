@@ -1,5 +1,5 @@
 #!/bin/bash
-# procx - 进程查看器。bash 仅做环境处理；逻辑在 python。
+# procx - 进程查看器，按 CPU/内存排序，可过滤可杀，支持进程树
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8

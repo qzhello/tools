@@ -1,5 +1,5 @@
 #!/bin/bash
-# ports - 列出监听端口 + 进程。bash 仅做环境处理；逻辑在 python。
+# ports - 列出监听端口 + 进程，识别常见服务，支持 -k 杀进程
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8

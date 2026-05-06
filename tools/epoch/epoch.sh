@@ -1,5 +1,5 @@
 #!/bin/bash
-# epoch - 时间戳/日期双向转换。bash 仅做环境处理；选项交给 python。
+# epoch - 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8

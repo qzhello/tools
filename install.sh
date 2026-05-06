@@ -2,9 +2,11 @@
 # tools 安装脚本
 # 用法:
 #   ./install.sh                      # 安装所有工具
-#   ./install.sh ssh-alias            # 安装指定工具
+#   ./install.sh ssh-alias json       # 安装指定工具
 #   ./install.sh --uninstall          # 卸载所有工具
-#   ./install.sh --uninstall ssh-alias
+#   ./install.sh --uninstall json     # 卸载指定工具
+#   ./install.sh list                 # 列出所有工具及安装状态
+#   ./install.sh --help               # 显示帮助
 #   ./install.sh --lang en            # 使用英文输出（目前为 stub，自动回退中文）
 
 # 强制 UTF-8 locale，避免 macOS 自带 bash 3.2 在默认 C locale 下截断中文
@@ -38,6 +40,8 @@ MSG_cn_rc_removed="✓ 已从 %s 移除"
 MSG_cn_uninstall_done="✓ %s 已卸载"
 MSG_cn_reload_hint="执行 source %s 或重新打开终端以生效"
 MSG_cn_bad_lang="✗ 不支持的语言: %s（仅支持 cn / en）"
+MSG_cn_list_header="可用工具（共 %d 个，已安装 %d）"
+MSG_cn_list_legend="✓ 已安装   - 未安装"
 
 # --- English (stub: 留空 → 自动回退到中文) ---
 MSG_en_shell_rc="Shell config: %s"
@@ -54,6 +58,8 @@ MSG_en_rc_removed=""
 MSG_en_uninstall_done=""
 MSG_en_reload_hint=""
 MSG_en_bad_lang=""
+MSG_en_list_header=""
+MSG_en_list_legend=""
 
 # 取消息模板：先取选定语言，空则回退中文
 _msg() {
@@ -177,14 +183,89 @@ list_available() {
     printf '%s' "$tools"
 }
 
+# 是否已安装（PATH 软链 / source.sh 标记）
+is_installed() {
+    local name="$1"
+    [[ -L "$INSTALL_DIR/$name" ]] && return 0
+    [[ -f "$SHELL_RC" ]] && grep -qF "# >>> tools/$name >>>" "$SHELL_RC" 2>/dev/null
+}
+
+# 从 tools/<name>/<name>.sh 第二行提取一句话描述
+# 形如:  # name - 描述...
+get_desc() {
+    local name="$1"
+    local script="$TOOLS_DIR/$name/$name.sh"
+    [[ -f "$script" ]] || { printf '%s' "(无脚本)"; return; }
+    sed -n '2p' "$script" | sed -E "s/^# *${name} *[-—–:]? *//" | sed -E 's/[[:space:]]*$//'
+}
+
+# list 子命令：表格化展示所有工具
+cmd_list() {
+    detect_shell_rc >/dev/null
+    local total=0 installed=0
+    local rows=""
+    for dir in "$TOOLS_DIR"/*/; do
+        [[ -d "$dir" ]] || continue
+        local name; name="$(basename "$dir")"
+        total=$((total + 1))
+        local mark="-"
+        if is_installed "$name"; then
+            mark="✓"
+            installed=$((installed + 1))
+        fi
+        rows+="$mark $name"$'\t'"$(get_desc "$name")"$'\n'
+    done
+
+    say list_header "$total" "$installed"
+    printf '\n'
+    # 用 column 对齐（macOS 自带）
+    if command -v column >/dev/null 2>&1; then
+        printf '%s' "$rows" | column -t -s $'\t'
+    else
+        printf '%s' "$rows"
+    fi
+    printf '\n'
+    say list_legend
+}
+
+# --help: 显示用法
+cmd_help() {
+    cat <<EOF
+tools - 个人小工具集
+
+用法:
+  ./install.sh                       安装所有工具
+  ./install.sh <tool> [<tool> ...]   安装指定工具
+  ./install.sh --uninstall           卸载所有工具
+  ./install.sh --uninstall <tool>    卸载指定工具
+  ./install.sh list                  列出所有工具及安装状态
+  ./install.sh --help                显示本帮助
+
+选项:
+  --lang cn|en       输出语言（默认 cn）
+  --uninstall        切换为卸载操作
+
+安装位置:
+  命令         $INSTALL_DIR/<tool>
+  shell 集成   追加到 ~/.zshrc / ~/.bashrc
+
+示例:
+  ./install.sh ssh-alias json epoch
+  ./install.sh --uninstall topx
+  ./install.sh list
+EOF
+}
+
 # ========== 主流程 ==========
 
 main() {
-    # 解析全局选项（--lang / --uninstall）+ 收集剩余位置参数
+    # 解析全局选项（--lang / --uninstall / list / --help）+ 收集剩余位置参数
     local action="install"
     local positional=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            -h|--help)   cmd_help; exit 0 ;;
+            list|--list) action="list"; shift ;;
             --lang)      LANG_CHOICE="$2"; shift 2 ;;
             --lang=*)    LANG_CHOICE="${1#--lang=}"; shift ;;
             --uninstall) action="uninstall"; shift ;;
@@ -197,6 +278,11 @@ main() {
         cn|en) ;;
         *) say_err bad_lang "$LANG_CHOICE"; exit 1 ;;
     esac
+
+    if [[ "$action" == "list" ]]; then
+        cmd_list
+        exit 0
+    fi
 
     detect_shell_rc
 

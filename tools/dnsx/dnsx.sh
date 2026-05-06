@@ -1,5 +1,5 @@
 #!/bin/bash
-# dnsx - 多 resolver DNS 对比查询。bash 仅做环境处理；逻辑在 python。
+# dnsx - 多 resolver DNS 对比查询，差异高亮（CDN/污染/未生效排查）
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8

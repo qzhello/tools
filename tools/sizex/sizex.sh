@@ -1,5 +1,5 @@
 #!/bin/bash
-# sizex - 目录大小可视化。bash 仅做环境处理；逻辑在 python。
+# sizex - 目录大小可视化，条形图按大小排序，找谁吃了硬盘
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8

@@ -1,5 +1,5 @@
 #!/bin/bash
-# b64 - base64 双向自动识别。bash 仅做环境处理；逻辑在 python。
+# b64 - base64 双向自动识别，支持 url-safe / 文件 / 剪贴板进出
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
