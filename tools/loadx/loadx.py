@@ -99,8 +99,9 @@ def _short_name(cmd: str, max_len: int = 24) -> str:
 def sample_top(n_procs: int = 50) -> TopSnap:
     """跑两段 top（间隔 1s），用第二段才能拿到真实 CPU%。"""
     try:
+        # -s 0 让两次采样紧挨着（默认 1s 间隔），CPU% 精度略降但快一倍
         out = subprocess.run(
-            ["top", "-l", "2", "-n", str(n_procs),
+            ["top", "-l", "2", "-s", "0", "-n", str(n_procs),
              "-stats", "pid,command,cpu,mem,power",
              "-ncols", "5"],
             capture_output=True, check=False, timeout=8,
@@ -770,13 +771,21 @@ def main() -> int:
     history: Dict[str, List[float]] = {"cpu": [], "mem": [], "net": [], "disk": [], "bat": []}
     HISTORY_MAX = 60
 
+    from concurrent.futures import ThreadPoolExecutor
+
     def run_once() -> None:
+        # 三个慢采样（top/net/disk 各 ~1s）并行跑；其他都是毫秒级，串行就行
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_top = ex.submit(sample_top)
+            f_net = ex.submit(lambda: NetSnap()) if args.no_net else ex.submit(sample_net, 1.0)
+            f_disk = ex.submit(lambda: DiskSnap()) if args.no_disk else ex.submit(sample_disk)
+            top = f_top.result()
+            net = f_net.result()
+            disk = f_disk.result()
+
         hw = sample_hw()
-        top = sample_top()
         vm = sample_vm_stat()
         swap_used, swap_total = sample_swap()
-        net = NetSnap() if args.no_net else sample_net(interval=1.0)
-        disk = DiskSnap() if args.no_disk else sample_disk()
         bat = sample_battery()
 
         verdicts = [
