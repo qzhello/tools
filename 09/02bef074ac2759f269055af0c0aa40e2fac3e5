@@ -1,0 +1,21 @@
+tools/loadx/loadx.py
+  s_b93e405f113a2e::t_8e5a4daaa342ae 572,600-626,654-692
+  s_b93e405f113a2e::t_7ddd9746c3e32a 502-505,509,511-553
+  s_b93e405f113a2e::t_982364bfdf616c 770-772,791-803,811
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "0902bef074ac2759f269055af0c0aa40e2fac3e5",
+  "prompts": {},
+  "sessions": {
+    "s_b93e405f113a2e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8b8fb40-83b6-4a2d-9887-0f642587978a",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "qzhello <951012707@qq.com>"
+    }
+  }
+}
