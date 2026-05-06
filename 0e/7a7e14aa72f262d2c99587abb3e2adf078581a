@@ -1,0 +1,26 @@
+README.md
+  s_b93e405f113a2e::t_6d890f7bcfd980 48
+  s_b93e405f113a2e::t_e9100ef8dfca51 151
+tools/loadx/loadx.sh
+  s_b93e405f113a2e::t_de22c4a1c13ef4 1-25
+tools/loadx/loadx.py
+  s_b93e405f113a2e::t_985b9507121944 498-499,503-504
+  s_b93e405f113a2e::t_558ff9f1cb31a9 462-477
+  s_b93e405f113a2e::t_086ec3ea9f9188 1-461,478-497,500-502,505-599
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.1",
+  "base_commit_sha": "0e7a7e14aa72f262d2c99587abb3e2adf078581a",
+  "prompts": {},
+  "sessions": {
+    "s_b93e405f113a2e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8b8fb40-83b6-4a2d-9887-0f642587978a",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "qzhello <951012707@qq.com>"
+    }
+  }
+}
