@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""json 工具的宽容美化器。
+"""jsonx 工具的宽容美化器。
 
 stdin: 待美化的输入文本
 stdout: 美化结果（解析失败时原样输出）
@@ -14,12 +14,12 @@ import re
 
 # ANSI 决策：
 #   1. NO_COLOR 设置 → 关
-#   2. JSON_FORCE_COLOR 设置 → 开
+#   2. JSONX_FORCE_COLOR 设置 → 开
 #   3. 否则看 stderr 是否 TTY
 import os
 _USE_COLOR = (
     not os.environ.get("NO_COLOR")
-    and (os.environ.get("JSON_FORCE_COLOR") or sys.stderr.isatty())
+    and (os.environ.get("JSONX_FORCE_COLOR") or sys.stderr.isatty())
 )
 RED = "\x1b[1;31m" if _USE_COLOR else ""
 DIM = "\x1b[2m" if _USE_COLOR else ""

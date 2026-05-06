@@ -1,5 +1,5 @@
 #!/bin/bash
-# json - JSON 美化工具（带宽容解析、文件/目录就地美化、错误高亮）
+# jsonx - JSON 美化（宽容解析、文件/目录就地美化、错误高亮、剪贴板/管道/参数）
 
 # 强制 UTF-8 locale，避免 macOS 自带 bash 3.2 在默认 C locale 下截断中文
 export LANG=en_US.UTF-8
@@ -20,14 +20,14 @@ COLORIZE="$SCRIPT_DIR/colorize.py"
 
 show_help() {
     cat <<'EOF'
-json - JSON 美化工具
+jsonx - JSON 美化工具
 
 输入模式:
-  json '<json>'              直接传 JSON 字符串（务必单引号包住）
-  echo '<json>' | json       从管道读
-  json                       从剪贴板读 (pbpaste)
-  json <文件>                就地美化单个文件，原文件备份为 <文件>.bak
-  json <目录>                递归美化目录下所有 *.json，每个文件备份 .bak
+  jsonx '<json>'             直接传 JSON 字符串（务必单引号包住）
+  echo '<json>' | jsonx      从管道读
+  jsonx                      从剪贴板读 (pbpaste)
+  jsonx <文件>               就地美化单个文件，原文件备份为 <文件>.bak
+  jsonx <目录>               递归美化目录下所有 *.json，每个文件备份 .bak
 
 选项:
   -n, --dry-run              只报告不写盘（仅文件/目录模式）
@@ -83,7 +83,7 @@ prettify_text() {
     # 强制要求 prettify.py 生成颜色，这样回放出来才有红色高亮。
     local force_color=""
     if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-        force_color="JSON_FORCE_COLOR=1"
+        force_color="JSONX_FORCE_COLOR=1"
     fi
 
     set +e

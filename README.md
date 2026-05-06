@@ -32,7 +32,7 @@ python3 --version    # 检查；< 3.9 请升级
 | 工具 | 依赖的系统命令 | macOS | Linux 安装 |
 |------|---------------|-------|-----------|
 | ssh-alias | `ssh`, `security`(Keychain) | 自带 | `apt install openssh-client`（密码模式不可用：依赖 macOS Keychain） |
-| json      | （无）                       | -     | -          |
+| jsonx     | `pbcopy`/`pbpaste`           | 自带 | 剪贴板模式不可用 |
 | epoch     | （无；剪贴板模式需 `pbpaste`） | 自带 | 剪贴板模式不可用 |
 | pingx     | `ping`                       | 自带 | 自带       |
 | tracex    | `traceroute`                 | 自带 | `apt install traceroute` |
@@ -82,8 +82,8 @@ sudo dnf install -y \
 git clone https://github.com/qzhello/tools.git
 cd tools
 ./install.sh                    # 安装所有工具
-./install.sh ssh-alias json     # 安装指定工具
-./install.sh --lang en json     # 指定输出语言（默认 cn）
+./install.sh ssh-alias jsonx    # 安装指定工具
+./install.sh --lang en jsonx    # 指定输出语言（默认 cn）
 ```
 
 会自动：
@@ -133,7 +133,7 @@ cd tools
 | 工具 | 说明 |
 |------|------|
 | [ssh-alias](tools/ssh-alias/) | SSH 快捷登录管理，密钥免密 / 密码登录（密码加密存于 macOS Keychain） |
-| [json](tools/json/)           | JSON 美化，结果同时打到 stdout 和剪贴板，支持参数 / 管道 / 剪贴板 / 文件 / 目录 |
+| [jsonx](tools/jsonx/)         | JSON 美化，结果同时打到 stdout 和剪贴板，支持参数 / 管道 / 剪贴板 / 文件 / 目录 |
 | [epoch](tools/epoch/)         | 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳，一次输出多种格式 |
 | [pingx](tools/pingx/)         | 实时可视化 ping，sparkline 折线 + 丢包率 + min/avg/p95/max 统计 |
 | [tracex](tools/tracex/)       | 可视化路由追踪（mtr 风格），按跳显示丢包率 + 延迟 sparkline |

@@ -2,9 +2,9 @@
 # tools 安装脚本
 # 用法:
 #   ./install.sh                      # 安装所有工具
-#   ./install.sh ssh-alias json       # 安装指定工具
+#   ./install.sh ssh-alias jsonx      # 安装指定工具
 #   ./install.sh --uninstall          # 卸载所有工具
-#   ./install.sh --uninstall json     # 卸载指定工具
+#   ./install.sh --uninstall jsonx    # 卸载指定工具
 #   ./install.sh list                 # 列出所有工具及安装状态
 #   ./install.sh --help               # 显示帮助
 #   ./install.sh --lang en            # 使用英文输出（目前为 stub，自动回退中文）
@@ -250,7 +250,7 @@ tools - 个人小工具集
   shell 集成   追加到 ~/.zshrc / ~/.bashrc
 
 示例:
-  ./install.sh ssh-alias json epoch
+  ./install.sh ssh-alias jsonx epoch
   ./install.sh --uninstall topx
   ./install.sh list
 EOF
