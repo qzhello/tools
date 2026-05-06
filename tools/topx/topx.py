@@ -787,11 +787,9 @@ def tui_main(stdscr, args) -> None:
     try:
         _run_event_loop(stdscr, st)
     finally:
+        # daemon 线程会随主进程退出；不要 join 等待它们
+        # （disk 线程可能正卡在 iostat -w 1 阻塞中，等它会拖慢退出 ~1s）
         stop.set()
-        # 给线程一点时间收尾（disk 线程可能在 iostat 阻塞中，最多等 ~1.5s）
-        t_sys.join(timeout=0.5)
-        t_disk.join(timeout=2.0)
-        t_proc.join(timeout=0.5)
 
 
 def _run_event_loop(stdscr, st: State) -> None:
