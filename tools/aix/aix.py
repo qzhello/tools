@@ -384,6 +384,330 @@ def _bar_color_for(v: int, max_v: int) -> str:
     return GREEN
 
 
+# ---------- 交互式 TUI ----------
+
+import curses
+
+RANGES = ["1d", "7d", "30d", "90d", "all"]
+DIMS = ["day", "model", "project", "session"]
+
+
+@dataclass
+class TuiState:
+    rows: List[Row]
+    dim_idx: int = 0           # DIMS
+    range_idx: int = 1         # RANGES
+    sort: str = "total"        # "total" / "label"
+    project_filter: str = ""
+    model_filter: str = ""
+    scroll: int = 0
+    input_mode: Optional[str] = None  # "project" / "model" / None
+    input_buf: str = ""
+    status: str = ""
+
+    @property
+    def dim(self) -> str:
+        return DIMS[self.dim_idx]
+
+    @property
+    def range(self) -> str:
+        return RANGES[self.range_idx]
+
+
+def _init_curses_colors() -> Dict[str, int]:
+    curses.start_color()
+    curses.use_default_colors()
+    pairs = {
+        "dim":     (8, -1) if curses.COLORS >= 16 else (curses.COLOR_WHITE, -1),
+        "cyan":    (curses.COLOR_CYAN, -1),
+        "green":   (curses.COLOR_GREEN, -1),
+        "yellow":  (curses.COLOR_YELLOW, -1),
+        "red":     (curses.COLOR_RED, -1),
+        "magenta": (curses.COLOR_MAGENTA, -1),
+        "blue":    (curses.COLOR_BLUE, -1),
+        "reverse": (curses.COLOR_BLACK, curses.COLOR_CYAN),
+    }
+    out: Dict[str, int] = {}
+    for i, (name, (fg, bg)) in enumerate(pairs.items(), start=1):
+        try:
+            curses.init_pair(i, fg, bg)
+        except curses.error:
+            pass
+        out[name] = curses.color_pair(i)
+    return out
+
+
+def _safe_addstr(win, y: int, x: int, text: str, attr: int = 0) -> None:
+    try:
+        max_y, max_x = win.getmaxyx()
+        if y < 0 or y >= max_y or x >= max_x:
+            return
+        # 截断
+        avail = max_x - x - 1
+        if avail <= 0:
+            return
+        win.addnstr(y, x, text, avail, attr)
+    except curses.error:
+        pass
+
+
+def _bar_pair(c: Dict[str, int], v: int, max_v: int) -> int:
+    if max_v <= 0:
+        return c.get("green", 0)
+    r = v / max_v
+    if r >= 0.8:
+        return c["red"]
+    if r >= 0.4:
+        return c["yellow"]
+    return c["green"]
+
+
+def _draw_tabs(win, y: int, label: str, items: List[str], active: int, c: Dict[str, int]) -> int:
+    _safe_addstr(win, y, 0, f"{label}: ", c["dim"])
+    x = len(label) + 2
+    for i, it in enumerate(items):
+        attr = c["reverse"] | curses.A_BOLD if i == active else 0
+        text = f" {it} "
+        _safe_addstr(win, y, x, text, attr)
+        x += len(text) + 1
+    return x
+
+
+def _compute_table(state: TuiState) -> Tuple[List[Bucket], Bucket]:
+    since = parse_since(state.range)
+    rows = filter_rows(
+        state.rows,
+        since,
+        state.project_filter or None,
+        state.model_filter or None,
+    )
+    buckets = aggregate(rows, state.dim)
+    if state.sort == "label":
+        buckets.sort(key=lambda b: b.label)
+    else:
+        buckets.sort(key=lambda b: b.total, reverse=True)
+        if state.dim == "day":
+            buckets.sort(key=lambda b: b.label)
+    grand = Bucket(label="Σ")
+    for b in buckets:
+        grand.input += b.input
+        grand.output += b.output
+        grand.cache_read += b.cache_read
+        grand.cache_create += b.cache_create
+    return buckets, grand
+
+
+def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: TuiState, c: Dict[str, int]) -> None:
+    h, w = win.getmaxyx()
+    if not buckets:
+        _safe_addstr(win, top_y, 0, "(没有数据)", c["dim"])
+        return
+
+    label_w = max(len(b.label) for b in buckets)
+    label_w = min(max(label_w, 8), 40)
+    cols_fixed = label_w + 8 + 8 + 9 + 9 + 9 + 7  # 数字列宽
+    bar_w = max(10, w - cols_fixed - 2)
+
+    header = (
+        f"{state.dim:<{label_w}}"
+        f"{'in':>8}"
+        f"{'out':>8}"
+        f"{'cache_r':>9}"
+        f"{'cache_w':>9}"
+        f"{'total':>9}"
+        f"{'hit%':>6}"
+        " bar"
+    )
+    _safe_addstr(win, top_y, 0, header, c["dim"])
+
+    # 列表区高度（留出底部 2 行：合计 + 帮助行）
+    list_h = h - top_y - 4
+    if list_h <= 0:
+        return
+
+    visible = buckets[state.scroll : state.scroll + list_h]
+    max_total = max(b.total for b in buckets) or 1
+
+    for i, b in enumerate(visible):
+        y = top_y + 1 + i
+        lbl = b.label[:label_w]
+        prefix = (
+            f"{lbl:<{label_w}}"
+            f"{fmt_num(b.input):>8}"
+            f"{fmt_num(b.output):>8}"
+            f"{fmt_num(b.cache_read):>9}"
+            f"{fmt_num(b.cache_create):>9}"
+        )
+        _safe_addstr(win, y, 0, prefix)
+        total_attr = _bar_pair(c, b.total, max_total) | curses.A_BOLD
+        _safe_addstr(win, y, len(prefix), f"{fmt_num(b.total):>9}", total_attr)
+        hit_str = f"{b.cache_hit * 100:5.1f} "
+        _safe_addstr(win, y, len(prefix) + 9, hit_str)
+
+        bar_x = len(prefix) + 9 + 6
+        ratio = b.total / max_total
+        filled = int(round(ratio * bar_w))
+        empty = bar_w - filled
+        _safe_addstr(win, y, bar_x, "█" * filled, c["cyan"])
+        _safe_addstr(win, y, bar_x + filled, "░" * empty, c["dim"])
+
+    # 合计行
+    sep_y = top_y + 1 + min(len(visible), list_h)
+    _safe_addstr(win, sep_y, 0, "─" * (w - 1), c["dim"])
+    sum_y = sep_y + 1
+    sum_line = (
+        f"{'Σ':<{label_w}}"
+        f"{fmt_num(grand.input):>8}"
+        f"{fmt_num(grand.output):>8}"
+        f"{fmt_num(grand.cache_read):>9}"
+        f"{fmt_num(grand.cache_create):>9}"
+        f"{fmt_num(grand.total):>9}"
+        f"{grand.cache_hit * 100:5.1f}%"
+    )
+    _safe_addstr(win, sum_y, 0, sum_line, curses.A_BOLD)
+
+
+def _draw_footer(win, state: TuiState, c: Dict[str, int]) -> None:
+    h, w = win.getmaxyx()
+    y = h - 1
+    if state.input_mode:
+        prompt = f"过滤 {state.input_mode}: {state.input_buf}_"
+        _safe_addstr(win, y, 0, prompt, c["yellow"] | curses.A_BOLD)
+        return
+    if state.status:
+        _safe_addstr(win, y, 0, state.status, c["yellow"])
+        return
+    keys = "↑↓ 滚动  Tab 维度  ←→ 范围  / 项目  m 模型  c 清空  s 排序  r 重扫  q 退出"
+    _safe_addstr(win, y, 0, keys, c["dim"])
+
+
+def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
+    win.erase()
+    h, w = win.getmaxyx()
+
+    # 标题行
+    title_left = "aix · Claude Code 用量"
+    filt = []
+    if state.project_filter:
+        filt.append(f"proj~{state.project_filter}")
+    if state.model_filter:
+        filt.append(f"model~{state.model_filter}")
+    title_right = "  ".join(filt) if filt else "无过滤"
+    _safe_addstr(win, 0, 0, title_left, curses.A_BOLD | c["cyan"])
+    _safe_addstr(win, 0, max(0, w - len(title_right) - 1), title_right, c["dim"])
+
+    # 维度 / 范围切换条
+    _draw_tabs(win, 2, "维度", DIMS, state.dim_idx, c)
+    _draw_tabs(win, 3, "范围", RANGES, state.range_idx, c)
+
+    # 数据表
+    buckets, grand = _compute_table(state)
+    # 限制 scroll 范围
+    h_avail = h - 5 - 4
+    max_scroll = max(0, len(buckets) - max(1, h_avail))
+    if state.scroll > max_scroll:
+        state.scroll = max_scroll
+    if state.scroll < 0:
+        state.scroll = 0
+
+    _draw_table(win, 5, buckets, grand, state, c)
+    _draw_footer(win, state, c)
+    win.refresh()
+
+
+def _handle_input_key(state: TuiState, ch: int) -> None:
+    if ch in (27,):  # Esc
+        state.input_mode = None
+        state.input_buf = ""
+        return
+    if ch in (10, 13):  # Enter
+        if state.input_mode == "project":
+            state.project_filter = state.input_buf.strip()
+        elif state.input_mode == "model":
+            state.model_filter = state.input_buf.strip()
+        state.input_mode = None
+        state.input_buf = ""
+        state.scroll = 0
+        return
+    if ch in (curses.KEY_BACKSPACE, 127, 8):
+        state.input_buf = state.input_buf[:-1]
+        return
+    if 32 <= ch < 127:
+        state.input_buf += chr(ch)
+
+
+def _tui_main(stdscr, initial_rows: List[Row]) -> None:
+    curses.curs_set(0)
+    stdscr.timeout(-1)
+    c = _init_curses_colors()
+
+    state = TuiState(rows=initial_rows)
+
+    while True:
+        _draw(stdscr, state, c)
+        ch = stdscr.getch()
+
+        if state.input_mode:
+            _handle_input_key(state, ch)
+            state.status = ""
+            continue
+
+        state.status = ""
+
+        if ch in (ord("q"), 27):
+            return
+        elif ch in (curses.KEY_LEFT, ord("h")):
+            state.range_idx = (state.range_idx - 1) % len(RANGES)
+            state.scroll = 0
+        elif ch in (curses.KEY_RIGHT, ord("l")):
+            state.range_idx = (state.range_idx + 1) % len(RANGES)
+            state.scroll = 0
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            state.scroll += 1
+        elif ch in (curses.KEY_UP, ord("k")):
+            state.scroll -= 1
+        elif ch == curses.KEY_NPAGE:
+            state.scroll += 10
+        elif ch == curses.KEY_PPAGE:
+            state.scroll -= 10
+        elif ch == ord("\t"):
+            state.dim_idx = (state.dim_idx + 1) % len(DIMS)
+            state.scroll = 0
+        elif ch in (ord("1"), ord("2"), ord("3"), ord("4")):
+            state.dim_idx = ch - ord("1")
+            state.scroll = 0
+        elif ch == ord("/"):
+            state.input_mode = "project"
+            state.input_buf = state.project_filter
+        elif ch == ord("m"):
+            state.input_mode = "model"
+            state.input_buf = state.model_filter
+        elif ch == ord("c"):
+            state.project_filter = ""
+            state.model_filter = ""
+            state.scroll = 0
+        elif ch == ord("s"):
+            state.sort = "label" if state.sort == "total" else "total"
+        elif ch == ord("r"):
+            state.status = "重新扫描中…"
+            _draw(stdscr, state, c)
+            state.rows = collect_rows()
+            state.status = "已重扫"
+        elif ch == ord("?"):
+            state.status = "↑↓ 滚动 / Tab 切维度 / ←→ 切范围 / / 项目 / m 模型 / c 清空 / s 排序 / r 重扫 / q 退出"
+
+
+def run_tui() -> int:
+    sys.stderr.write("加载中…\n")
+    sys.stderr.flush()
+    rows = collect_rows()
+    if not rows:
+        print("没有发现 Claude Code 日志（~/.claude/projects/ 为空）", file=sys.stderr)
+        return 1
+    curses.wrapper(_tui_main, rows)
+    return 0
+
+
 # ---------- main ----------
 
 def main() -> int:
@@ -405,7 +729,11 @@ def main() -> int:
     parser.add_argument("--watch", type=float, nargs="?", const=5.0, help="持续刷新（秒，默认 5）")
     parser.add_argument("-v", "--verbose", action="store_true", help="显示缓存命中信息")
     parser.add_argument("--no-cache", action="store_true", help="忽略缓存全量重解析")
+    parser.add_argument("-i", "--interactive", action="store_true", help="进入交互式 TUI（curses）")
     args = parser.parse_args()
+
+    if args.interactive:
+        return run_tui()
 
     since = parse_since(args.since)
 
