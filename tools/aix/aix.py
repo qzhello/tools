@@ -636,10 +636,12 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
         f"{'hit%':>6}"
         " bar"
     )
-    _safe_addstr(win, top_y, 0, header, c["dim"])
+    _safe_addstr(win, top_y, 0, header, c["cyan"] | curses.A_BOLD)
+    # 表头下方分隔线
+    _safe_addstr(win, top_y + 1, 0, "─" * (w - 1), c["cyan"])
 
-    # 列表区高度（留出底部 2 行：合计 + 帮助行）
-    list_h = h - top_y - 4
+    # 列表区高度（留出顶部表头+分隔=2 行，底部分隔+合计+帮助=3 行）
+    list_h = h - top_y - 5
     if list_h <= 0:
         return
 
@@ -647,7 +649,7 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
     max_total = max(b.total for b in buckets) or 1
 
     for i, b in enumerate(visible):
-        y = top_y + 1 + i
+        y = top_y + 2 + i
         lbl = b.label[:label_w]
         prefix = (
             f"{lbl:<{label_w}}"
@@ -669,10 +671,10 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
         _safe_addstr(win, y, bar_x, "█" * filled, c["cyan"])
         _safe_addstr(win, y, bar_x + filled, "░" * empty, c["dim"])
 
-    # 合计行
-    sep_y = top_y + 1 + min(len(visible), list_h)
+    # 合计行（紧贴帮助行上方）
+    sum_y = h - 2
+    sep_y = sum_y - 1
     _safe_addstr(win, sep_y, 0, "─" * (w - 1), c["dim"])
-    sum_y = sep_y + 1
     sum_line = (
         f"{'Σ':<{label_w}}"
         f"{fmt_num(grand.input):>8}"
@@ -688,11 +690,14 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
 def _draw_footer(win, state: TuiState, c: Dict[str, int]) -> None:
     h, w = win.getmaxyx()
     y = h - 1
+    # 反相背景做成「帮助条」，整行铺满，避免被忽略
+    bar_attr = c["reverse"] | curses.A_BOLD
+    _safe_addstr(win, y, 0, " " * (w - 1), bar_attr)
     if state.status:
-        _safe_addstr(win, y, 0, state.status, c["yellow"])
+        _safe_addstr(win, y, 1, state.status, c["reverse"] | curses.A_BOLD)
         return
-    keys = "↑↓滚动  Tab维度  ←→范围  p项目  m模型  t数据源  c清空  s排序  r重扫  ?帮助  q退出"
-    _safe_addstr(win, y, 0, keys, c["dim"])
+    keys = " ↑↓ 滚动 │ Tab 维度 │ ←→ 范围 │ p 项目 │ m 模型 │ t 数据源 │ c 清空 │ s 排序 │ r 重扫 │ ? 帮助 │ q 退出 "
+    _safe_addstr(win, y, 0, keys[: max(0, w - 1)], bar_attr)
 
 
 def _draw_picker(win, picker: Picker, c: Dict[str, int]) -> None:
@@ -776,7 +781,7 @@ def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
 
     # 数据表
     buckets, grand = _compute_table(state)
-    h_avail = h - 5 - 4
+    h_avail = h - 5 - 5
     max_scroll = max(0, len(buckets) - max(1, h_avail))
     if state.scroll > max_scroll:
         state.scroll = max_scroll
@@ -969,8 +974,13 @@ def run_tui(tools: List[str]) -> int:
     if not rows:
         print("没有发现 AI 日志（~/.claude/projects/ 和 ~/.codex/sessions/ 都没数据）", file=sys.stderr)
         return 1
-    curses.wrapper(_tui_main, rows, tools)
-    return 0
+    try:
+        curses.wrapper(_tui_main, rows, tools)
+    finally:
+        # 终端已由 wrapper 恢复；跳过 Python 关闭时对几十万对象的 GC，秒退
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 # ---------- main ----------
