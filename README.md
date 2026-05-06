@@ -33,7 +33,7 @@ python3 --version    # 检查；< 3.9 请升级
 |------|---------------|-------|-----------|
 | ssh-alias | `ssh`, `security`(Keychain) | 自带 | `apt install openssh-client`（密码模式不可用：依赖 macOS Keychain） |
 | jsonx     | `pbcopy`/`pbpaste`           | 自带 | 剪贴板模式不可用 |
-| epoch     | （无；剪贴板模式需 `pbpaste`） | 自带 | 剪贴板模式不可用 |
+| datex     | （无；剪贴板模式需 `pbpaste`） | 自带 | 剪贴板模式不可用 |
 | pingx     | `ping`                       | 自带 | 自带       |
 | tracex    | `traceroute`                 | 自带 | `apt install traceroute` |
 | dnsx      | `dig`                        | 自带 | `apt install dnsutils` |
@@ -112,7 +112,7 @@ cd tools
 ✓ b64        base64 双向自动识别，支持 url-safe / 文件 / 剪贴板进出
 ✓ certx      HTTPS 证书检查，到期天数 + SAN + 链 + TLS 版本
 - dnsx       多 resolver DNS 对比查询，差异高亮（CDN/污染/未生效排查）
-✓ epoch      时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳
+✓ datex      时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳
 ...
 
 ✓ 已安装   - 未安装
@@ -134,7 +134,7 @@ cd tools
 |------|------|
 | [ssh-alias](tools/ssh-alias/) | SSH 快捷登录管理，密钥免密 / 密码登录（密码加密存于 macOS Keychain） |
 | [jsonx](tools/jsonx/)         | JSON 美化，结果同时打到 stdout 和剪贴板，支持参数 / 管道 / 剪贴板 / 文件 / 目录 |
-| [epoch](tools/epoch/)         | 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳，一次输出多种格式 |
+| [datex](tools/datex/)         | 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳，一次输出多种格式 |
 | [pingx](tools/pingx/)         | 实时可视化 ping，sparkline 折线 + 丢包率 + min/avg/p95/max 统计 |
 | [tracex](tools/tracex/)       | 可视化路由追踪（mtr 风格），按跳显示丢包率 + 延迟 sparkline |
 | [dnsx](tools/dnsx/)           | 多 DNS resolver 并行查询对比，差异高亮，排查 CDN/污染/未生效 |

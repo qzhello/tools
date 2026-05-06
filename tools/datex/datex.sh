@@ -1,5 +1,5 @@
 #!/bin/bash
-# epoch - 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳
+# datex - 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳，一次输出多种格式
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
@@ -14,9 +14,9 @@ while [[ -L "$_resolve" ]]; do
     [[ "$_link" = /* ]] && _resolve="$_link" || _resolve="$_dir/$_link"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$_resolve")" && pwd)"
-EPOCH_PY="$SCRIPT_DIR/epoch.py"
+DATEX_PY="$SCRIPT_DIR/datex.py"
 
 command -v python3 &>/dev/null || { printf '✗ 找不到 python3\n' >&2; exit 1; }
-[[ -f "$EPOCH_PY" ]] || { printf '✗ 找不到 %s\n' "$EPOCH_PY" >&2; exit 1; }
+[[ -f "$DATEX_PY" ]] || { printf '✗ 找不到 %s\n' "$DATEX_PY" >&2; exit 1; }
 
-exec python3 "$EPOCH_PY" "$@"
+exec python3 "$DATEX_PY" "$@"

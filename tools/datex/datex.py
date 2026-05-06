@@ -33,10 +33,10 @@ except ImportError:  # Python < 3.9
 
 LOCAL_TZ = datetime.now().astimezone().tzinfo
 
-# ANSI 配色（NO_COLOR / EPOCH_FORCE_COLOR / TTY 检测）
+# ANSI 配色（NO_COLOR / DATEX_FORCE_COLOR / TTY 检测）
 _USE_COLOR = (
     not os.environ.get("NO_COLOR")
-    and (os.environ.get("EPOCH_FORCE_COLOR") or sys.stdout.isatty())
+    and (os.environ.get("DATEX_FORCE_COLOR") or sys.stdout.isatty())
 )
 DIM = "\x1b[2m" if _USE_COLOR else ""
 CYAN = "\x1b[36m" if _USE_COLOR else ""
@@ -212,7 +212,7 @@ def read_clipboard() -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="epoch",
+        prog="datex",
         description="时间戳 ↔ 日期双向转换",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

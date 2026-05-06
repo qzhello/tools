@@ -250,7 +250,7 @@ tools - 个人小工具集
   shell 集成   追加到 ~/.zshrc / ~/.bashrc
 
 示例:
-  ./install.sh ssh-alias jsonx epoch
+  ./install.sh ssh-alias jsonx datex
   ./install.sh --uninstall topx
   ./install.sh list
 EOF
