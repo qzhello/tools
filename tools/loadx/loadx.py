@@ -771,17 +771,55 @@ def main() -> int:
     history: Dict[str, List[float]] = {"cpu": [], "mem": [], "net": [], "disk": [], "bat": []}
     HISTORY_MAX = 60
 
+    import io
+    import threading
     from concurrent.futures import ThreadPoolExecutor
 
-    def run_once() -> None:
-        # 三个慢采样（top/net/disk 各 ~1s）并行跑；其他都是毫秒级，串行就行
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            f_top = ex.submit(sample_top)
-            f_net = ex.submit(lambda: NetSnap()) if args.no_net else ex.submit(sample_net, 1.0)
-            f_disk = ex.submit(lambda: DiskSnap()) if args.no_disk else ex.submit(sample_disk)
-            top = f_top.result()
-            net = f_net.result()
-            disk = f_disk.result()
+    # watch 模式：net/disk 在后台线程持续采样，主循环读最新缓存（懒加载）
+    cache_lock = threading.Lock()
+    cached_net: Dict[str, Optional[NetSnap]] = {"v": None}
+    cached_disk: Dict[str, Optional[DiskSnap]] = {"v": None}
+    stop_evt = threading.Event()
+
+    def _bg_net() -> None:
+        while not stop_evt.is_set():
+            ns = sample_net(interval=1.0)
+            with cache_lock:
+                cached_net["v"] = ns
+
+    def _bg_disk() -> None:
+        while not stop_evt.is_set():
+            ds = sample_disk()
+            with cache_lock:
+                cached_disk["v"] = ds
+
+    def _capture(fn, *fa, **fk) -> str:
+        sio = io.StringIO()
+        old = sys.stdout
+        sys.stdout = sio
+        try:
+            fn(*fa, **fk)
+        finally:
+            sys.stdout = old
+        return sio.getvalue()
+
+    def _draw_frame(in_watch: bool) -> None:
+        if in_watch:
+            with cache_lock:
+                net = cached_net["v"] or NetSnap()
+                disk = cached_disk["v"] or DiskSnap()
+                net_ready = cached_net["v"] is not None
+                disk_ready = cached_disk["v"] is not None
+            top = sample_top()  # 主循环只等 top（~1.3s）
+        else:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                f_top = ex.submit(sample_top)
+                f_net = ex.submit(lambda: NetSnap()) if args.no_net else ex.submit(sample_net, 1.0)
+                f_disk = ex.submit(lambda: DiskSnap()) if args.no_disk else ex.submit(sample_disk)
+                top = f_top.result()
+                net = f_net.result()
+                disk = f_disk.result()
+            net_ready = disk_ready = True
 
         hw = sample_hw()
         vm = sample_vm_stat()
@@ -791,39 +829,60 @@ def main() -> int:
         verdicts = [
             assess_cpu(top, hw),
             assess_mem(top, vm, swap_used, swap_total),
-            assess_net(net),
-            assess_disk(disk),
+            assess_net(net) if net_ready else Verdict("网络", "ok", f"{DIM}采样中…{RESET}", ""),
+            assess_disk(disk) if disk_ready else Verdict("磁盘", "ok", f"{DIM}采样中…{RESET}", ""),
         ]
         bv = assess_battery(bat)
         if bv:
             verdicts.append(bv)
 
-        # 记录历史（仅 watch 模式有意义，单次 history 也无害）
         history["cpu"].append((100 - top.cpu_idle) / 100)
         history["mem"].append(top.phys_used_b / top.phys_total_b if top.phys_total_b else 0)
-        history["net"].append(min(1.0, (net.in_bps + net.out_bps) / (100 * 1024**2)))
-        history["disk"].append(min(1.0, disk.bps / (500 * 1024**2)))
+        if net_ready:
+            history["net"].append(min(1.0, (net.in_bps + net.out_bps) / (100 * 1024**2)))
+        if disk_ready:
+            history["disk"].append(min(1.0, disk.bps / (500 * 1024**2)))
         history["bat"].append((bat.pct if bat else 0) / 100)
         for k in history:
             if len(history[k]) > HISTORY_MAX:
                 history[k] = history[k][-HISTORY_MAX:]
 
-        render(verdicts, hw, top, swap_used, net, disk, bat,
-               history=history if args.watch else None)
+        body = _capture(render, verdicts, hw, top, swap_used, net, disk, bat,
+                        history=history if in_watch else None)
+
+        if in_watch:
+            footer = (f"\n{DIM}↻ 每 {args.watch:g}s 刷新  ·  历史 "
+                      f"{len(history['cpu'])}/{HISTORY_MAX}  ·  "
+                      f"net {'✓' if net_ready else '…'}  disk {'✓' if disk_ready else '…'}"
+                      f"  （Ctrl-C 退出）{RESET}\n")
+            body += footer
+            # 防闪：cursor home → 每行末 EL → 末尾 ED
+            sys.stdout.write("\x1b[H")
+            for line in body.splitlines():
+                sys.stdout.write(line + "\x1b[K\n")
+            sys.stdout.write("\x1b[J")
+            sys.stdout.flush()
+        else:
+            sys.stdout.write(body)
+            sys.stdout.flush()
 
     if args.watch:
+        if not args.no_net:
+            threading.Thread(target=_bg_net, daemon=True).start()
+        if not args.no_disk:
+            threading.Thread(target=_bg_disk, daemon=True).start()
+        sys.stdout.write("\x1b[2J\x1b[H")  # 首次进入清一次屏
+        sys.stdout.flush()
         try:
             while True:
-                sys.stdout.write("\x1b[2J\x1b[H")
-                sys.stdout.flush()
-                run_once()
-                print(f"\n{DIM}↻ 每 {args.watch:g}s 刷新  ·  历史 {len(history['cpu'])}/{HISTORY_MAX}（Ctrl-C 退出）{RESET}")
+                _draw_frame(in_watch=True)
                 time.sleep(args.watch)
         except KeyboardInterrupt:
-            print()
+            stop_evt.set()
+            sys.stdout.write("\n")
             return 0
     else:
-        run_once()
+        _draw_frame(in_watch=False)
     return 0
 
 
