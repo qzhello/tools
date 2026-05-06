@@ -145,7 +145,7 @@ cd tools
 | [b64](tools/b64/)             | base64 双向自动识别，支持 url-safe、文件、剪贴板进出 |
 | [topx](tools/topx/)           | 简洁的系统监控 TUI，4 象限（CPU/MEM/NET/DISK）+ 进程列表，单键交互 |
 | [myip](tools/myip/)           | 多源公网 IP + ISP/地理位置对比，本机网卡 v4/v6、默认网关、DNS 一览 |
-| [aix](tools/aix/)             | Claude Code token 用量统计，按天/模型/项目/会话聚合，条形图 + 缓存命中率 |
+| [aix](tools/aix/)             | Claude Code + Codex token 用量统计，TUI 交互，按天/模型/项目/会话/源聚合 |
 
 ## 如何添加新工具
 

@@ -22,10 +22,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-PROJECTS_DIR = Path.home() / ".claude" / "projects"
+CLAUDE_DIR = Path.home() / ".claude" / "projects"
+CODEX_DIR = Path.home() / ".codex" / "sessions"
 CACHE_DIR = Path.home() / ".cache" / "aix"
 CACHE_FILE = CACHE_DIR / "cache.json"
-CACHE_VERSION = 2
+CACHE_VERSION = 3
+
+TOOLS_ALL = ["claude", "codex"]
+TOOL_LABEL = {"claude": "Claude Code", "codex": "Codex"}
 
 _USE_COLOR = (
     not os.environ.get("NO_COLOR")
@@ -54,8 +58,9 @@ RESET  = _c("\x1b[0m")
 @dataclass
 class Row:
     date: str        # YYYY-MM-DD（本地时区）
+    tool: str        # "claude" / "codex"
     model: str
-    project: str     # 反推出的 cwd（短名）
+    project: str     # 反推出的 cwd
     session: str     # session-id
     input: int = 0
     output: int = 0
@@ -68,8 +73,8 @@ class Row:
 
 
 # 每个文件解析出的聚合 tuple，写进缓存
-# (date, model, project, session, input, output, cache_read, cache_create)
-FileAgg = List[Tuple[str, str, str, str, int, int, int, int]]
+# (date, tool, model, project, session, input, output, cache_read, cache_create)
+FileAgg = List[Tuple[str, str, str, str, str, int, int, int, int]]
 
 
 def decode_project(folder_name: str) -> str:
@@ -93,9 +98,9 @@ def short_project(path: str, max_len: int = 40) -> str:
     return "…" + path[-(max_len - 1):]
 
 
-def parse_file(path: Path) -> FileAgg:
-    """流式读 jsonl，对每个 assistant 消息抽 usage。"""
-    bucket: Dict[Tuple[str, str, str, str], List[int]] = defaultdict(lambda: [0, 0, 0, 0])
+def parse_claude_file(path: Path) -> FileAgg:
+    """流式读 Claude Code 的 jsonl，对每个 assistant 消息抽 usage。"""
+    bucket: Dict[Tuple[str, str, str, str, str], List[int]] = defaultdict(lambda: [0, 0, 0, 0])
     project = decode_project(path.parent.name)
     session = path.stem
 
@@ -116,15 +121,14 @@ def parse_file(path: Path) -> FileAgg:
                 if not usage:
                     continue
                 model = msg.get("model") or "unknown"
-                ts = obj.get("timestamp")
-                date = _ts_to_local_date(ts)
+                date = _ts_to_local_date(obj.get("timestamp"))
 
                 ci = int(usage.get("cache_creation_input_tokens") or 0)
                 cr = int(usage.get("cache_read_input_tokens") or 0)
                 inp = int(usage.get("input_tokens") or 0)
                 out = int(usage.get("output_tokens") or 0)
 
-                key = (date, model, project, session)
+                key = (date, "claude", model, project, session)
                 b = bucket[key]
                 b[0] += inp
                 b[1] += out
@@ -134,7 +138,82 @@ def parse_file(path: Path) -> FileAgg:
         return []
 
     return [
-        (k[0], k[1], k[2], k[3], v[0], v[1], v[2], v[3])
+        (k[0], k[1], k[2], k[3], k[4], v[0], v[1], v[2], v[3])
+        for k, v in bucket.items()
+    ]
+
+
+def parse_codex_file(path: Path) -> FileAgg:
+    """流式读 Codex 的 rollout-*.jsonl。
+
+    Codex 把 token_count 事件里的 total_token_usage 作为整段会话的累计值。
+    我们追踪累计差值（delta），按时间戳分配到当天，配上当时的 model 和 cwd。
+    """
+    bucket: Dict[Tuple[str, str, str, str, str], List[int]] = defaultdict(lambda: [0, 0, 0, 0])
+    session = path.stem
+    if session.startswith("rollout-"):
+        # 取尾部 UUID
+        session = session.rsplit("-", 5)[-1] if session.count("-") >= 5 else session
+
+    cur_model = "unknown"
+    cur_cwd: Optional[str] = None
+    prev_input = prev_output = prev_cached = 0
+
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.rstrip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = obj.get("type")
+                p = obj.get("payload") or {}
+                if t == "session_meta":
+                    cur_cwd = p.get("cwd") or cur_cwd
+                elif t == "turn_context":
+                    if p.get("cwd"):
+                        cur_cwd = p["cwd"]
+                    if p.get("model"):
+                        cur_model = p["model"]
+                elif t == "event_msg" and p.get("type") == "token_count":
+                    info = p.get("info")
+                    if not info:
+                        continue
+                    tot = info.get("total_token_usage") or {}
+                    inp_total = int(tot.get("input_tokens") or 0)
+                    out_total = int(tot.get("output_tokens") or 0)
+                    cached_total = int(tot.get("cached_input_tokens") or 0)
+                    # 把 reasoning_output 算到 output 里
+                    reasoning = int(tot.get("reasoning_output_tokens") or 0)
+                    out_total += reasoning
+
+                    d_inp = max(0, inp_total - prev_input)
+                    d_out = max(0, out_total - prev_output)
+                    d_cached = max(0, cached_total - prev_cached)
+                    if d_inp == 0 and d_out == 0 and d_cached == 0:
+                        continue
+                    # Codex 的 input_tokens 是包含 cached 的总额；拆开
+                    d_inp_uncached = max(0, d_inp - d_cached)
+
+                    project = cur_cwd or "/"
+                    date = _ts_to_local_date(obj.get("timestamp"))
+                    key = (date, "codex", cur_model, project, session)
+                    b = bucket[key]
+                    b[0] += d_inp_uncached
+                    b[1] += d_out
+                    b[2] += d_cached
+                    # codex 没有显式的 cache_create
+                    prev_input = inp_total
+                    prev_output = out_total
+                    prev_cached = cached_total
+    except OSError:
+        return []
+
+    return [
+        (k[0], k[1], k[2], k[3], k[4], v[0], v[1], v[2], v[3])
         for k, v in bucket.items()
     ]
 
@@ -172,9 +251,15 @@ def save_cache(cache: Dict) -> None:
     tmp.replace(CACHE_FILE)
 
 
-def collect_rows(verbose: bool = False) -> List[Row]:
-    if not PROJECTS_DIR.exists():
-        return []
+_TOOL_DISPATCH = {
+    "claude": (CLAUDE_DIR, parse_claude_file),
+    "codex":  (CODEX_DIR,  parse_codex_file),
+}
+
+
+def collect_rows(tools: Optional[List[str]] = None, verbose: bool = False) -> List[Row]:
+    if tools is None:
+        tools = TOOLS_ALL
 
     cache = load_cache()
     file_cache: Dict[str, Dict] = cache.get("files", {})
@@ -184,23 +269,27 @@ def collect_rows(verbose: bool = False) -> List[Row]:
     parsed = 0
     cached = 0
 
-    for path in PROJECTS_DIR.rglob("*.jsonl"):
-        try:
-            st = path.stat()
-        except OSError:
+    for tool in tools:
+        root, parser = _TOOL_DISPATCH[tool]
+        if not root.exists():
             continue
-        key = str(path)
-        sig = {"size": st.st_size, "mtime": int(st.st_mtime)}
-        old = file_cache.get(key)
-        if old and old.get("size") == sig["size"] and old.get("mtime") == sig["mtime"]:
-            agg = old.get("agg") or []
-            cached += 1
-        else:
-            agg = parse_file(path)
-            parsed += 1
-        new_file_cache[key] = {**sig, "agg": agg}
-        for tup in agg:
-            rows.append(Row(*tup))
+        for path in root.rglob("*.jsonl"):
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            key = f"{tool}:{path}"
+            sig = {"size": st.st_size, "mtime": int(st.st_mtime)}
+            old = file_cache.get(key)
+            if old and old.get("size") == sig["size"] and old.get("mtime") == sig["mtime"]:
+                agg = old.get("agg") or []
+                cached += 1
+            else:
+                agg = parser(path)
+                parsed += 1
+            new_file_cache[key] = {**sig, "agg": agg}
+            for tup in agg:
+                rows.append(Row(*tup))
 
     save_cache({"version": CACHE_VERSION, "files": new_file_cache})
     if verbose:
@@ -252,10 +341,18 @@ def parse_since(spec: Optional[str]) -> Optional[str]:
     raise SystemExit(f"无法解析 --since: {spec}（用 7d / 30d / 2026-01-01 / all）")
 
 
-def filter_rows(rows: List[Row], since: Optional[str], project_filter: Optional[str], model_filter: Optional[str]) -> List[Row]:
+def filter_rows(
+    rows: List[Row],
+    since: Optional[str],
+    project_filter: Optional[str],
+    model_filter: Optional[str],
+    tool_filter: Optional[str] = None,
+) -> List[Row]:
     out = rows
     if since:
         out = [r for r in out if r.date >= since]
+    if tool_filter:
+        out = [r for r in out if r.tool == tool_filter]
     if project_filter:
         pf = project_filter.lower()
         out = [r for r in out if pf in r.project.lower()]
@@ -271,11 +368,13 @@ def aggregate(rows: List[Row], dim: str) -> List[Bucket]:
         if dim == "day":
             key = r.date
         elif dim == "model":
-            key = r.model
+            key = f"{r.tool}:{r.model}"
         elif dim == "project":
             key = short_project(r.project)
         elif dim == "session":
-            key = r.session[:8]
+            key = f"{r.tool}:{r.session[:8]}"
+        elif dim == "tool":
+            key = TOOL_LABEL.get(r.tool, r.tool)
         else:
             raise SystemExit(f"未知聚合维度: {dim}")
         b = buckets.get(key)
@@ -389,20 +488,38 @@ def _bar_color_for(v: int, max_v: int) -> str:
 import curses
 
 RANGES = ["1d", "7d", "30d", "90d", "all"]
-DIMS = ["day", "model", "project", "session"]
+DIMS = ["day", "model", "project", "session", "tool"]
+
+
+@dataclass
+class Picker:
+    """弹出选择器状态。"""
+    title: str
+    field: str           # "project" / "model" / "tool"
+    options: List[Tuple[str, int]]   # (display, total_tokens)
+    cursor: int = 0
+    query: str = ""
+
+    def filtered(self) -> List[Tuple[int, str, int]]:
+        q = self.query.lower()
+        out = []
+        for i, (label, total) in enumerate(self.options):
+            if not q or q in label.lower():
+                out.append((i, label, total))
+        return out
 
 
 @dataclass
 class TuiState:
     rows: List[Row]
-    dim_idx: int = 0           # DIMS
-    range_idx: int = 1         # RANGES
-    sort: str = "total"        # "total" / "label"
+    dim_idx: int = 0
+    range_idx: int = 1
+    sort: str = "total"
+    tool_filter: str = ""        # "" = 全部
     project_filter: str = ""
     model_filter: str = ""
     scroll: int = 0
-    input_mode: Optional[str] = None  # "project" / "model" / None
-    input_buf: str = ""
+    picker: Optional[Picker] = None
     status: str = ""
 
     @property
@@ -480,6 +597,7 @@ def _compute_table(state: TuiState) -> Tuple[List[Bucket], Bucket]:
         since,
         state.project_filter or None,
         state.model_filter or None,
+        state.tool_filter or None,
     )
     buckets = aggregate(rows, state.dim)
     if state.sort == "label":
@@ -570,15 +688,69 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
 def _draw_footer(win, state: TuiState, c: Dict[str, int]) -> None:
     h, w = win.getmaxyx()
     y = h - 1
-    if state.input_mode:
-        prompt = f"过滤 {state.input_mode}: {state.input_buf}_"
-        _safe_addstr(win, y, 0, prompt, c["yellow"] | curses.A_BOLD)
-        return
     if state.status:
         _safe_addstr(win, y, 0, state.status, c["yellow"])
         return
-    keys = "↑↓ 滚动  Tab 维度  ←→ 范围  / 项目  m 模型  c 清空  s 排序  r 重扫  q 退出"
+    keys = "↑↓滚动  Tab维度  ←→范围  p项目  m模型  t数据源  c清空  s排序  r重扫  ?帮助  q退出"
     _safe_addstr(win, y, 0, keys, c["dim"])
+
+
+def _draw_picker(win, picker: Picker, c: Dict[str, int]) -> None:
+    """居中弹出列表，键盘可选；上方 query 行支持类型过滤。"""
+    h, w = win.getmaxyx()
+    items = picker.filtered()
+    n_items = len(items)
+
+    chrome_h = 7  # top + title + query + sep + ... + sep + hint + bot
+    box_h = min(max(chrome_h + 3, n_items + chrome_h), h - 2)
+    box_w = min(max(48, len(picker.title) + 8), w - 4)
+    y0 = (h - box_h) // 2
+    x0 = (w - box_w) // 2
+
+    # 边框
+    top    = "┌" + "─" * (box_w - 2) + "┐"
+    mid    = "├" + "─" * (box_w - 2) + "┤"
+    bot    = "└" + "─" * (box_w - 2) + "┘"
+    blank  = "│" + " " * (box_w - 2) + "│"
+
+    _safe_addstr(win, y0, x0, top, c["cyan"])
+    title_line = f"│ {picker.title}".ljust(box_w - 1) + "│"
+    _safe_addstr(win, y0 + 1, x0, title_line, c["cyan"] | curses.A_BOLD)
+    query_text = f"│ 输入过滤: {picker.query}_".ljust(box_w - 1) + "│"
+    _safe_addstr(win, y0 + 2, x0, query_text)
+    _safe_addstr(win, y0 + 3, x0, mid, c["cyan"])
+
+    list_h = box_h - chrome_h
+    # 滚动 cursor 进可视范围
+    # 让选中项尽量在中间
+    visible_start = max(0, picker.cursor - list_h // 2)
+    visible_start = min(visible_start, max(0, n_items - list_h))
+
+    for i in range(list_h):
+        y = y0 + 4 + i
+        idx_in_list = visible_start + i
+        if idx_in_list >= n_items:
+            _safe_addstr(win, y, x0, blank, c["cyan"])
+            continue
+        opt_idx, label, total = items[idx_in_list]
+        marker = "▶" if idx_in_list == picker.cursor else " "
+        token_str = fmt_num(total) if total else ""
+        # 内容宽度：box_w - 4 (左右边框+边距)
+        content_w = box_w - 4
+        token_w = len(token_str) + 1
+        label_w = content_w - token_w - 2
+        if len(label) > label_w:
+            label_show = label[:label_w - 1] + "…"
+        else:
+            label_show = label
+        line = f"│ {marker} {label_show:<{label_w}} {token_str:>{token_w}} │"
+        attr = (c["reverse"] | curses.A_BOLD) if idx_in_list == picker.cursor else 0
+        _safe_addstr(win, y, x0, line, attr)
+
+    _safe_addstr(win, y0 + box_h - 3, x0, mid, c["cyan"])
+    hint_text = "│ ↑↓ 选择  Enter 应用  Esc 取消  打字过滤  Ctrl-U 清空"
+    _safe_addstr(win, y0 + box_h - 2, x0, hint_text.ljust(box_w - 1)[:box_w - 1] + "│", c["dim"])
+    _safe_addstr(win, y0 + box_h - 1, x0, bot, c["cyan"])
 
 
 def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
@@ -586,13 +758,15 @@ def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
     h, w = win.getmaxyx()
 
     # 标题行
-    title_left = "aix · Claude Code 用量"
+    title_left = "aix · AI token 用量"
     filt = []
+    tool_show = TOOL_LABEL.get(state.tool_filter, "全部") if state.tool_filter else "全部数据源"
+    filt.append(f"源={tool_show}")
     if state.project_filter:
-        filt.append(f"proj~{state.project_filter}")
+        filt.append(f"项目={state.project_filter}")
     if state.model_filter:
-        filt.append(f"model~{state.model_filter}")
-    title_right = "  ".join(filt) if filt else "无过滤"
+        filt.append(f"模型={state.model_filter}")
+    title_right = "  ".join(filt)
     _safe_addstr(win, 0, 0, title_left, curses.A_BOLD | c["cyan"])
     _safe_addstr(win, 0, max(0, w - len(title_right) - 1), title_right, c["dim"])
 
@@ -602,7 +776,6 @@ def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
 
     # 数据表
     buckets, grand = _compute_table(state)
-    # 限制 scroll 范围
     h_avail = h - 5 - 4
     max_scroll = max(0, len(buckets) - max(1, h_avail))
     if state.scroll > max_scroll:
@@ -612,43 +785,131 @@ def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
 
     _draw_table(win, 5, buckets, grand, state, c)
     _draw_footer(win, state, c)
+
+    if state.picker:
+        _draw_picker(win, state.picker, c)
     win.refresh()
 
 
-def _handle_input_key(state: TuiState, ch: int) -> None:
-    if ch in (27,):  # Esc
-        state.input_mode = None
-        state.input_buf = ""
+def _build_picker(state: TuiState, field: str) -> Picker:
+    """field ∈ {project, model, tool}。从原始 rows 聚合一份选项列表。"""
+    if field == "tool":
+        opts: Dict[str, int] = defaultdict(int)
+        for r in state.rows:
+            opts[r.tool] += r.total
+        items = [("(全部)", 0)] + [
+            (TOOL_LABEL.get(t, t), opts[t]) for t in sorted(opts, key=lambda k: -opts[k])
+        ]
+        title = "选择数据源"
+    elif field == "model":
+        opts = defaultdict(int)
+        for r in state.rows:
+            if state.tool_filter and r.tool != state.tool_filter:
+                continue
+            opts[r.model] += r.total
+        items = [("(全部)", 0)] + [(m, opts[m]) for m in sorted(opts, key=lambda k: -opts[k])]
+        title = "选择模型"
+    else:  # project
+        opts = defaultdict(int)
+        for r in state.rows:
+            if state.tool_filter and r.tool != state.tool_filter:
+                continue
+            opts[r.project] += r.total
+        items = [("(全部)", 0)] + [
+            (short_project(p, 60), opts[p]) for p in sorted(opts, key=lambda k: -opts[k])
+        ]
+        title = "选择项目"
+    return Picker(title=title, field=field, options=items, cursor=0, query="")
+
+
+def _apply_picker(state: TuiState) -> None:
+    """根据当前 picker.cursor 套用选择。"""
+    p = state.picker
+    if not p:
+        return
+    items = p.filtered()
+    if not items:
+        state.picker = None
+        return
+    _, label, _ = items[p.cursor]
+    if p.field == "tool":
+        if label == "(全部)":
+            state.tool_filter = ""
+        else:
+            # 反查 tool key
+            for k, v in TOOL_LABEL.items():
+                if v == label:
+                    state.tool_filter = k
+                    break
+    elif p.field == "model":
+        state.model_filter = "" if label == "(全部)" else label
+    elif p.field == "project":
+        # 用完整 cwd 反查不便；这里直接保存显示串作子串匹配（去掉 ~）
+        if label == "(全部)":
+            state.project_filter = ""
+        else:
+            # 去掉前导 "~" / "…"
+            seed = label.lstrip("~").lstrip("…").lstrip("/")
+            # 取尾部一段更稳：如 "Downloads/tools" 子串匹配最准
+            parts = seed.split("/")
+            state.project_filter = parts[-1] if parts else seed
+    state.picker = None
+    state.scroll = 0
+
+
+def _handle_picker_key(state: TuiState, ch: int) -> None:
+    p = state.picker
+    if not p:
+        return
+    items = p.filtered()
+    n = len(items)
+    if ch == 27:  # Esc
+        state.picker = None
         return
     if ch in (10, 13):  # Enter
-        if state.input_mode == "project":
-            state.project_filter = state.input_buf.strip()
-        elif state.input_mode == "model":
-            state.model_filter = state.input_buf.strip()
-        state.input_mode = None
-        state.input_buf = ""
-        state.scroll = 0
+        _apply_picker(state)
+        return
+    if ch in (curses.KEY_DOWN,) and n:
+        p.cursor = (p.cursor + 1) % n
+        return
+    if ch in (curses.KEY_UP,) and n:
+        p.cursor = (p.cursor - 1) % n
+        return
+    if ch == curses.KEY_NPAGE and n:
+        p.cursor = min(n - 1, p.cursor + 10)
+        return
+    if ch == curses.KEY_PPAGE and n:
+        p.cursor = max(0, p.cursor - 10)
         return
     if ch in (curses.KEY_BACKSPACE, 127, 8):
-        state.input_buf = state.input_buf[:-1]
+        p.query = p.query[:-1]
+        p.cursor = 0
+        return
+    if ch == 21:  # Ctrl-U: 清空 query
+        p.query = ""
+        p.cursor = 0
         return
     if 32 <= ch < 127:
-        state.input_buf += chr(ch)
+        p.query += chr(ch)
+        p.cursor = 0
 
 
-def _tui_main(stdscr, initial_rows: List[Row]) -> None:
+def _tui_main(stdscr, initial_rows: List[Row], initial_tools: List[str]) -> None:
     curses.curs_set(0)
     stdscr.timeout(-1)
     c = _init_curses_colors()
 
     state = TuiState(rows=initial_rows)
+    # 启动时如果只有一个 tool，预设为筛选项
+    if len(initial_tools) == 1:
+        state.tool_filter = initial_tools[0]
 
     while True:
         _draw(stdscr, state, c)
         ch = stdscr.getch()
 
-        if state.input_mode:
-            _handle_input_key(state, ch)
+        if state.picker:
+            _handle_picker_key(state, ch)
             state.status = ""
             continue
 
@@ -673,16 +934,17 @@ def _tui_main(stdscr, initial_rows: List[Row]) -> None:
         elif ch == ord("\t"):
             state.dim_idx = (state.dim_idx + 1) % len(DIMS)
             state.scroll = 0
-        elif ch in (ord("1"), ord("2"), ord("3"), ord("4")):
-            state.dim_idx = ch - ord("1")
+        elif ord("1") <= ch <= ord("5"):
+            state.dim_idx = min(ch - ord("1"), len(DIMS) - 1)
             state.scroll = 0
-        elif ch == ord("/"):
-            state.input_mode = "project"
-            state.input_buf = state.project_filter
+        elif ch in (ord("p"), ord("/")):
+            state.picker = _build_picker(state, "project")
         elif ch == ord("m"):
-            state.input_mode = "model"
-            state.input_buf = state.model_filter
+            state.picker = _build_picker(state, "model")
+        elif ch == ord("t"):
+            state.picker = _build_picker(state, "tool")
         elif ch == ord("c"):
+            state.tool_filter = ""
             state.project_filter = ""
             state.model_filter = ""
             state.scroll = 0
@@ -694,17 +956,20 @@ def _tui_main(stdscr, initial_rows: List[Row]) -> None:
             state.rows = collect_rows()
             state.status = "已重扫"
         elif ch == ord("?"):
-            state.status = "↑↓ 滚动 / Tab 切维度 / ←→ 切范围 / / 项目 / m 模型 / c 清空 / s 排序 / r 重扫 / q 退出"
+            state.status = (
+                "p项目  m模型  t数据源（弹窗选择，打字过滤；Enter确认/Esc取消） · "
+                "1-5切维度 · ←→切范围 · ↑↓滚动 · c清空过滤 · s排序 · r重扫 · q退出"
+            )
 
 
-def run_tui() -> int:
+def run_tui(tools: List[str]) -> int:
     sys.stderr.write("加载中…\n")
     sys.stderr.flush()
-    rows = collect_rows()
+    rows = collect_rows(tools=tools)
     if not rows:
-        print("没有发现 Claude Code 日志（~/.claude/projects/ 为空）", file=sys.stderr)
+        print("没有发现 AI 日志（~/.claude/projects/ 和 ~/.codex/sessions/ 都没数据）", file=sys.stderr)
         return 1
-    curses.wrapper(_tui_main, rows)
+    curses.wrapper(_tui_main, rows, tools)
     return 0
 
 
@@ -717,9 +982,15 @@ def main() -> int:
     )
     parser.add_argument(
         "-b", "--by",
-        choices=["day", "model", "project", "session"],
+        choices=["day", "model", "project", "session", "tool"],
         default="day",
         help="聚合维度（默认 day）",
+    )
+    parser.add_argument(
+        "-T", "--tool",
+        choices=["claude", "codex", "all"],
+        default="all",
+        help="数据源（默认 all：Claude Code + Codex）",
     )
     parser.add_argument("-s", "--since", default="7d", help="时间范围：7d / 30d / 2026-01-01 / all（默认 7d）")
     parser.add_argument("-n", "--top", type=int, default=20, help="最多显示行数（默认 20，0=全部）")
@@ -732,8 +1003,10 @@ def main() -> int:
     parser.add_argument("-i", "--interactive", action="store_true", help="进入交互式 TUI（curses）")
     args = parser.parse_args()
 
+    tools = TOOLS_ALL if args.tool == "all" else [args.tool]
+
     if args.interactive:
-        return run_tui()
+        return run_tui(tools)
 
     since = parse_since(args.since)
 
@@ -744,7 +1017,7 @@ def main() -> int:
             pass
 
     def render_once() -> None:
-        rows = collect_rows(verbose=args.verbose)
+        rows = collect_rows(tools=tools, verbose=args.verbose)
         rows = filter_rows(rows, since, args.project, args.model)
         buckets = aggregate(rows, args.by)
         head = f"{BOLD}aix{RESET} {DIM}by={args.by} since={args.since}"
