@@ -1,0 +1,599 @@
+#!/usr/bin/env python3
+"""loadx - 一句话告诉你机器现在累在哪。
+
+不像 topx 全景 TUI，loadx 一次采样、一句话结论：
+  - 找出最大瓶颈（CPU / 内存 / 网络 / 磁盘 / 电池 / 散热）
+  - 每项给当前指标 + Top 3 消耗者
+  - 给一条简短建议
+
+采样源（macOS）：
+  top -l 2 -n N   每进程 CPU/MEM/POWER（取 -l 2 第二段才是真实利用率）
+  vm_stat         内存压力 + swap
+  pmset -g batt   电池/电源
+  netstat -ib     网卡累计字节，两次采样取差
+  iostat -d -w 1 -c 2  磁盘每秒
+  sysctl          硬件型号
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+_USE_COLOR = (
+    not os.environ.get("NO_COLOR")
+    and (os.environ.get("LOADX_FORCE_COLOR") or sys.stdout.isatty())
+)
+
+
+def _c(code: str) -> str:
+    return code if _USE_COLOR else ""
+
+
+DIM    = _c("\x1b[2m")
+BOLD   = _c("\x1b[1m")
+CYAN   = _c("\x1b[36m")
+GREEN  = _c("\x1b[32m")
+YELLOW = _c("\x1b[33m")
+RED    = _c("\x1b[31m")
+MAG    = _c("\x1b[35m")
+GRAY   = _c("\x1b[90m")
+RESET  = _c("\x1b[0m")
+
+
+# ---------- 数据采样 ----------
+
+@dataclass
+class Proc:
+    pid: int
+    name: str
+    cpu: float = 0.0       # %
+    mem_kb: int = 0
+    power: float = 0.0     # 瓦/相对单位
+
+
+@dataclass
+class TopSnap:
+    cpu_user: float = 0.0
+    cpu_sys: float = 0.0
+    cpu_idle: float = 0.0
+    phys_total_b: int = 0
+    phys_used_b: int = 0
+    phys_unused_b: int = 0
+    wired_b: int = 0
+    compressor_b: int = 0
+    procs: List[Proc] = field(default_factory=list)
+
+
+_SIZE_RE = re.compile(r"^([\d.]+)\s*([KMGT])?$", re.IGNORECASE)
+
+
+def _to_bytes(s: str) -> int:
+    s = s.strip()
+    if not s:
+        return 0
+    m = _SIZE_RE.match(s)
+    if not m:
+        return 0
+    n = float(m.group(1))
+    unit = (m.group(2) or "").upper()
+    mult = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}[unit]
+    return int(n * mult)
+
+
+def _short_name(cmd: str, max_len: int = 24) -> str:
+    """top 的 COMMAND 列截断到 16 字符；尽量给个有意义的名字。"""
+    name = cmd.strip()
+    if len(name) > max_len:
+        name = name[: max_len - 1] + "…"
+    return name
+
+
+def sample_top(n_procs: int = 50) -> TopSnap:
+    """跑两段 top（间隔 1s），用第二段才能拿到真实 CPU%。"""
+    try:
+        out = subprocess.run(
+            ["top", "-l", "2", "-n", str(n_procs),
+             "-stats", "pid,command,cpu,mem,power",
+             "-ncols", "5"],
+            capture_output=True, check=False, timeout=8,
+        ).stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return TopSnap()
+
+    snap = TopSnap()
+    # 切两段：找两次 "Processes:" 之间
+    parts = out.split("\nProcesses:")
+    raw = "Processes:" + parts[-1] if len(parts) > 1 else out
+
+    for line in raw.splitlines():
+        if line.startswith("CPU usage:"):
+            m = re.search(r"([\d.]+)%\s*user.*?([\d.]+)%\s*sys.*?([\d.]+)%\s*idle", line)
+            if m:
+                snap.cpu_user = float(m.group(1))
+                snap.cpu_sys = float(m.group(2))
+                snap.cpu_idle = float(m.group(3))
+        elif line.startswith("PhysMem:"):
+            # PhysMem: 63G used (6017M wired, 28G compressor), 78M unused.
+            m = re.search(r"([\d.]+[KMGT]?)\s*used\s*\(([\d.]+[KMGT]?)\s*wired,\s*([\d.]+[KMGT]?)\s*compressor\),\s*([\d.]+[KMGT]?)\s*unused", line)
+            if m:
+                snap.phys_used_b = _to_bytes(m.group(1))
+                snap.wired_b = _to_bytes(m.group(2))
+                snap.compressor_b = _to_bytes(m.group(3))
+                snap.phys_unused_b = _to_bytes(m.group(4))
+                snap.phys_total_b = snap.phys_used_b + snap.phys_unused_b
+
+    # 进程列表：第二段的进程数据才是 1s 内真实 CPU%
+    in_proc_section = False
+    seen_header = 0
+    for line in raw.splitlines():
+        if line.startswith("PID") and "COMMAND" in line:
+            seen_header += 1
+            in_proc_section = True
+            continue
+        if not in_proc_section:
+            continue
+        if not line.strip():
+            in_proc_section = False
+            continue
+        # 列：pid command cpu mem power
+        # 注意 command 可能含空格，按位置切
+        # top 输出固定列宽：pid 7 char, command 17 char (含尾空格), cpu, mem, power
+        m = re.match(r"^(\d+)\s+(.{1,16}?)\s+([\d.]+)\s+(\S+)\s+([\d.]+)\s*$", line)
+        if not m:
+            continue
+        pid = int(m.group(1))
+        name = m.group(2).strip()
+        cpu = float(m.group(3))
+        mem_b = _to_bytes(m.group(4))
+        power = float(m.group(5))
+        snap.procs.append(Proc(pid=pid, name=name, cpu=cpu, mem_kb=mem_b // 1024, power=power))
+
+    return snap
+
+
+def sample_vm_stat() -> Dict[str, int]:
+    """返回页数（不是字节）。"""
+    try:
+        out = subprocess.run(
+            ["vm_stat"], capture_output=True, check=False, timeout=3,
+        ).stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+    pages: Dict[str, int] = {}
+    for line in out.splitlines():
+        m = re.match(r"^(.+?):\s+(\d+)\.?\s*$", line)
+        if not m:
+            continue
+        key = m.group(1).strip().strip('"')
+        pages[key] = int(m.group(2))
+    return pages
+
+
+def sample_swap() -> Tuple[int, int]:
+    """sysctl vm.swapusage → (used_b, total_b)"""
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "vm.swapusage"],
+            capture_output=True, check=False, timeout=3,
+        ).stdout.decode("utf-8", errors="replace").strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return (0, 0)
+    # total = 2048.00M  used = 1234.50M  free = ...
+    m_total = re.search(r"total\s*=\s*([\d.]+)([KMGT])", out)
+    m_used = re.search(r"used\s*=\s*([\d.]+)([KMGT])", out)
+    total = _to_bytes(f"{m_total.group(1)}{m_total.group(2)}") if m_total else 0
+    used = _to_bytes(f"{m_used.group(1)}{m_used.group(2)}") if m_used else 0
+    return (used, total)
+
+
+@dataclass
+class NetSnap:
+    in_bps: float = 0.0
+    out_bps: float = 0.0
+
+
+def sample_net(interval: float = 1.0) -> NetSnap:
+    """两次 netstat -ib 取差，跳过 lo*。"""
+    def _read() -> Tuple[int, int]:
+        try:
+            out = subprocess.run(
+                ["netstat", "-ib"], capture_output=True, check=False, timeout=3,
+            ).stdout.decode("utf-8", errors="replace")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return (0, 0)
+        seen: set = set()
+        in_b = out_b = 0
+        for line in out.splitlines()[1:]:
+            cols = line.split()
+            if len(cols) < 10:
+                continue
+            name, mtu, network = cols[0], cols[1], cols[2]
+            if name in seen or name.startswith("lo"):
+                continue
+            if not network.startswith("<Link"):
+                continue
+            seen.add(name)
+            try:
+                in_b += int(cols[6])
+                out_b += int(cols[9])
+            except (ValueError, IndexError):
+                pass
+        return (in_b, out_b)
+
+    a_in, a_out = _read()
+    time.sleep(interval)
+    b_in, b_out = _read()
+    snap = NetSnap()
+    snap.in_bps = max(0, b_in - a_in) / interval
+    snap.out_bps = max(0, b_out - a_out) / interval
+    return snap
+
+
+@dataclass
+class DiskSnap:
+    bps: float = 0.0
+
+
+def sample_disk(timeout: float = 3.0) -> DiskSnap:
+    """iostat -d -K -w 1 -c 2 → 第二行是 1s 内的 MB/s。"""
+    try:
+        out = subprocess.run(
+            ["iostat", "-d", "-K", "-w", "1", "-c", "2"],
+            capture_output=True, check=False, timeout=timeout,
+        ).stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return DiskSnap()
+    lines = [l for l in out.splitlines() if l.strip()]
+    if len(lines) < 3:
+        return DiskSnap()
+    # 倒数第 1 行是 1s 采样行；每磁盘 3 列 (KB/t tps MB/s)
+    parts = lines[-1].split()
+    mb_total = 0.0
+    # 每三列一组，取第三列
+    for i in range(2, len(parts), 3):
+        try:
+            mb_total += float(parts[i])
+        except (ValueError, IndexError):
+            pass
+    snap = DiskSnap()
+    snap.bps = mb_total * 1024 * 1024
+    return snap
+
+
+@dataclass
+class BatterySnap:
+    on_battery: bool = False
+    pct: int = 0
+    state: str = "未知"     # charged / charging / discharging
+    time_left: str = ""
+    ac_watts: int = 0       # 估算
+    discharge_w: float = 0.0  # 放电功率
+
+
+def sample_battery() -> Optional[BatterySnap]:
+    try:
+        out = subprocess.run(
+            ["pmset", "-g", "batt"],
+            capture_output=True, check=False, timeout=3,
+        ).stdout.decode("utf-8", errors="replace")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    snap = BatterySnap()
+    snap.on_battery = "Battery Power" in out
+    m = re.search(r"(\d+)%;\s*(\S+)(?:;\s*([\d:]+)\s*remaining)?", out)
+    if m:
+        snap.pct = int(m.group(1))
+        snap.state = m.group(2).strip()
+        snap.time_left = m.group(3) or ""
+
+    # 用 ioreg 拿放电瓦数
+    try:
+        out2 = subprocess.run(
+            ["ioreg", "-rn", "AppleSmartBattery"],
+            capture_output=True, check=False, timeout=3,
+        ).stdout.decode("utf-8", errors="replace")
+        m_amp = re.search(r'"Amperage"\s*=\s*(-?\d+)', out2)
+        m_volt = re.search(r'"Voltage"\s*=\s*(\d+)', out2)
+        if m_amp and m_volt:
+            amp_ma = int(m_amp.group(1))
+            volt_mv = int(m_volt.group(1))
+            watts = abs(amp_ma) * volt_mv / 1_000_000.0
+            snap.discharge_w = watts
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return snap
+
+
+@dataclass
+class HwInfo:
+    model: str = ""
+    ncpu: int = 0
+    mem_total_b: int = 0
+
+
+def sample_hw() -> HwInfo:
+    info = HwInfo()
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "hw.ncpu", "hw.memsize"],
+            capture_output=True, check=False, timeout=2,
+        ).stdout.decode("utf-8", errors="replace").strip().splitlines()
+        if len(out) >= 2:
+            info.ncpu = int(out[0])
+            info.mem_total_b = int(out[1])
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+    # 友好型号名
+    try:
+        model = subprocess.run(
+            ["sysctl", "-n", "hw.model"],
+            capture_output=True, check=False, timeout=2,
+        ).stdout.decode("utf-8", errors="replace").strip()
+        info.model = model
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return info
+
+
+# ---------- 评估 ----------
+
+def fmt_bytes(b: float, per_sec: bool = False) -> str:
+    units = ["B", "K", "M", "G", "T"]
+    n = float(b)
+    i = 0
+    while n >= 1024 and i < len(units) - 1:
+        n /= 1024
+        i += 1
+    s = f"{n:.1f}{units[i]}" if i > 0 else f"{int(n)}{units[i]}"
+    return s + "/s" if per_sec else s
+
+
+def severity_color(level: str) -> str:
+    return {"ok": GREEN, "warn": YELLOW, "high": RED}.get(level, "")
+
+
+@dataclass
+class Verdict:
+    name: str          # CPU / 内存 / 网络 / 磁盘 / 电池
+    level: str         # ok / warn / high
+    headline: str      # 一句话主指标
+    detail: str        # top 消耗者
+    score: float = 0.0 # 用于排序谁是最大瓶颈
+
+
+def assess_cpu(snap: TopSnap, hw: HwInfo) -> Verdict:
+    used = 100 - snap.cpu_idle
+    if used >= 80:
+        level = "high"
+    elif used >= 50:
+        level = "warn"
+    else:
+        level = "ok"
+    headline = f"{used:.0f}%  ({snap.cpu_user:.0f}% 用户 + {snap.cpu_sys:.0f}% 系统)"
+    if hw.ncpu:
+        headline += f"  ·  {hw.ncpu} 核"
+    top3 = sorted(snap.procs, key=lambda p: -p.cpu)[:3]
+    top3 = [p for p in top3 if p.cpu > 0.5]
+    detail = "  ".join(f"{p.name} {p.cpu:.0f}%" for p in top3) if top3 else "(空闲)"
+    return Verdict("CPU", level, headline, detail, score=used)
+
+
+def assess_mem(snap: TopSnap, vm: Dict[str, int], swap_used: int, swap_total: int) -> Verdict:
+    if not snap.phys_total_b:
+        return Verdict("内存", "ok", "无数据", "")
+    used_pct = snap.phys_used_b / snap.phys_total_b * 100
+    # 内存压力：compressor + swap 使用都算
+    swap_g = swap_used / 1024**3
+    pressure_high = swap_g > 1 or used_pct >= 90
+    if pressure_high:
+        level = "high"
+    elif used_pct >= 75 or swap_g > 0.1:
+        level = "warn"
+    else:
+        level = "ok"
+    headline = f"{fmt_bytes(snap.phys_used_b)} / {fmt_bytes(snap.phys_total_b)}  ({used_pct:.0f}%)"
+    if swap_g > 0.05:
+        headline += f"  ·  swap {fmt_bytes(swap_used)}"
+    top3 = sorted(snap.procs, key=lambda p: -p.mem_kb)[:3]
+    detail = "  ".join(f"{p.name} {fmt_bytes(p.mem_kb * 1024)}" for p in top3) if top3 else ""
+    score = used_pct + (swap_g * 10)  # swap 加权
+    return Verdict("内存", level, headline, detail, score=score)
+
+
+def assess_net(snap: NetSnap) -> Verdict:
+    total = snap.in_bps + snap.out_bps
+    mb = total / (1024**2)
+    if mb >= 50:
+        level = "high"
+    elif mb >= 5:
+        level = "warn"
+    else:
+        level = "ok"
+    headline = f"↓ {fmt_bytes(snap.in_bps, True)}  ↑ {fmt_bytes(snap.out_bps, True)}"
+    detail = ""  # macOS 上拿 per-process 网络要 sudo nettop，跳过
+    return Verdict("网络", level, headline, detail, score=mb)
+
+
+def assess_disk(snap: DiskSnap) -> Verdict:
+    mb = snap.bps / (1024**2)
+    if mb >= 200:
+        level = "high"
+    elif mb >= 30:
+        level = "warn"
+    else:
+        level = "ok"
+    headline = f"{fmt_bytes(snap.bps, True)}"
+    return Verdict("磁盘", level, headline, "", score=mb / 5)  # disk 权重小一点
+
+
+def assess_battery(snap: Optional[BatterySnap]) -> Optional[Verdict]:
+    if snap is None or snap.pct == 0:
+        return None
+    if snap.on_battery:
+        if snap.pct < 15:
+            level = "high"
+            headline = f"{snap.pct}%  ·  电池供电  ·  剩 {snap.time_left or '?'}  ·  耗 {snap.discharge_w:.0f}W"
+        elif snap.discharge_w > 25:
+            level = "warn"
+            headline = f"{snap.pct}%  ·  电池供电  ·  耗 {snap.discharge_w:.0f}W (高)"
+        else:
+            level = "ok"
+            headline = f"{snap.pct}%  ·  电池供电  ·  耗 {snap.discharge_w:.0f}W  ·  剩 {snap.time_left or '估算中'}"
+    else:
+        if snap.state == "charged":
+            level = "ok"
+            headline = f"{snap.pct}%  ·  AC 已充满"
+        else:
+            level = "ok"
+            headline = f"{snap.pct}%  ·  AC 充电中"
+    return Verdict("电池", level, headline, "", score=0)
+
+
+# ---------- 渲染 ----------
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _disp_w(s: str) -> int:
+    bare = _ANSI_RE.sub("", s)
+    w = 0
+    for ch in bare:
+        w += 2 if ord(ch) > 0x2E80 else 1
+    return w
+
+
+def _ljust_w(s: str, width: int) -> str:
+    pad = width - _disp_w(s)
+    return s + (" " * pad if pad > 0 else "")
+
+
+def render(verdicts: List[Verdict], hw: HwInfo) -> None:
+    # 头部
+    title = f"{BOLD}loadx{RESET}"
+    if hw.model:
+        title += f"  {DIM}{hw.model}{RESET}"
+    print(title)
+
+    # 找最大瓶颈（ok 不算）
+    candidates = [v for v in verdicts if v.level != "ok"]
+    if candidates:
+        worst = max(candidates, key=lambda v: v.score)
+        color = severity_color(worst.level)
+        sym = "⚠" if worst.level == "warn" else "✗"
+        print(f"\n{BOLD}最大瓶颈{RESET}  {color}{sym} {worst.name}{RESET}  {worst.headline}")
+        if worst.detail:
+            print(f"           {DIM}{worst.detail}{RESET}")
+    else:
+        print(f"\n{GREEN}✓ 整体健康，没看到瓶颈{RESET}")
+    print()
+
+    # 各项明细（按显示宽度对齐）
+    name_w = max(_disp_w(v.name) for v in verdicts)
+    for v in verdicts:
+        color = severity_color(v.level)
+        sym = {"ok": "✓", "warn": "⚠", "high": "✗"}.get(v.level, "·")
+        name_padded = _ljust_w(v.name, name_w)
+        print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {v.headline}")
+        if v.detail:
+            print(f"     {' ' * name_w}  {DIM}{v.detail}{RESET}")
+
+    # 建议
+    tips = _suggest(verdicts)
+    if tips:
+        print()
+        for t in tips:
+            print(f"  {YELLOW}→{RESET} {t}")
+
+
+def _suggest(verdicts: List[Verdict]) -> List[str]:
+    out: List[str] = []
+    for v in verdicts:
+        if v.level == "ok":
+            continue
+        if v.name == "CPU":
+            top = v.detail.split("  ")[0] if v.detail else ""
+            if top:
+                out.append(f"CPU 主要在 {top.split()[0]}，看是否有失控的循环或可关掉的 tab")
+        elif v.name == "内存":
+            if "swap" in v.headline:
+                out.append("已经在用 swap，机器很快会卡。考虑关掉占内存最多的应用")
+            else:
+                top = v.detail.split("  ")[0] if v.detail else ""
+                if top:
+                    out.append(f"内存吃紧，{top.split()[0]} 占大头")
+        elif v.name == "磁盘":
+            out.append("磁盘繁忙，可能是 Spotlight/Time Machine/虚拟机后台 IO；观察是否持续")
+        elif v.name == "网络":
+            out.append("有大流量在跑，确认是同步/上传任务而不是被占用")
+        elif v.name == "电池":
+            if v.level == "high":
+                out.append(f"电量低 + 高负载，赶紧插电源")
+            elif v.level == "warn":
+                out.append(f"放电功率高，看 CPU 是否同时高（共因）")
+    return out
+
+
+# ---------- main ----------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="loadx",
+        description="一句话告诉你机器现在累在哪",
+    )
+    parser.add_argument("-w", "--watch", type=float, nargs="?", const=3.0,
+                        help="持续刷新（秒，默认 3）")
+    parser.add_argument("--no-net", action="store_true", help="跳过网络采样（更快）")
+    parser.add_argument("--no-disk", action="store_true", help="跳过磁盘采样（更快）")
+    args = parser.parse_args()
+
+    def run_once() -> None:
+        # 并发不便（top -l 2 已经占 1s），简单串行
+        hw = sample_hw()
+        top = sample_top()
+        vm = sample_vm_stat()
+        swap_used, swap_total = sample_swap()
+        net = NetSnap() if args.no_net else sample_net(interval=1.0)
+        disk = DiskSnap() if args.no_disk else sample_disk()
+        bat = sample_battery()
+
+        verdicts = [
+            assess_cpu(top, hw),
+            assess_mem(top, vm, swap_used, swap_total),
+            assess_net(net),
+            assess_disk(disk),
+        ]
+        bv = assess_battery(bat)
+        if bv:
+            verdicts.append(bv)
+        render(verdicts, hw)
+
+    if args.watch:
+        try:
+            while True:
+                sys.stdout.write("\x1b[2J\x1b[H")
+                sys.stdout.flush()
+                run_once()
+                print(f"\n{DIM}↻ 每 {args.watch:g}s 刷新（Ctrl-C 退出）{RESET}")
+                time.sleep(args.watch)
+        except KeyboardInterrupt:
+            print()
+            return 0
+    else:
+        run_once()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)

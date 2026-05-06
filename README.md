@@ -45,6 +45,7 @@ python3 --version    # 检查；< 3.9 请升级
 | topx      | `top`, `ps`, `netstat`, `iostat` | 自带 | `apt install net-tools sysstat` |
 | ipx       | `ifconfig`, `route`/`ip`, `scutil`（mac） | 自带 | `apt install net-tools iproute2` |
 | pathx     | （无）                       | -     | -          |
+| loadx     | `top`, `vm_stat`, `pmset`, `iostat`, `netstat`, `ioreg`（mac） | 自带 | mac 专用 |
 | aix       | （无；读 `~/.claude/projects/`） | -     | -          |
 
 ### 一键安装前置（参考）
@@ -147,6 +148,7 @@ cd tools
 | [topx](tools/topx/)           | 简洁的系统监控 TUI，4 象限（CPU/MEM/NET/DISK）+ 进程列表，单键交互 |
 | [ipx](tools/ipx/)             | 多源公网 IP + ISP/地理位置对比，本机网卡 v4/v6、默认网关、DNS 一览 |
 | [pathx](tools/pathx/)         | $PATH 可视化诊断：每项状态/binary 数/来源，重复 + 不存在 + 遮蔽检测，按名查找 |
+| [loadx](tools/loadx/)         | 一句话告诉你机器累在哪：CPU/内存/网络/磁盘/电池 各项状态 + Top 消耗者 + 建议 |
 | [aix](tools/aix/)             | Claude Code + Codex token 用量统计，TUI 交互，按天/模型/项目/会话/源聚合 |
 
 ## 如何添加新工具
