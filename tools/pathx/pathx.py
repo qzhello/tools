@@ -234,6 +234,100 @@ def find_binary(name: str, entries: List[Entry]) -> List[Tuple[int, str, str]]:
     return matches
 
 
+# 常见「装了但可能没进 PATH」的目录模式
+# 用 glob 风格；占位符 ${HOME} 会被替换
+_OFFPATH_PATTERNS = [
+    # Go：手动 SDK / go install 产物
+    "${HOME}/sdk/*/bin",
+    "${HOME}/go/bin",
+    "/usr/local/go/bin",
+    # Python
+    "${HOME}/.pyenv/versions/*/bin",
+    "${HOME}/.pyenv/shims",
+    "${HOME}/Library/Python/*/bin",
+    "/Library/Frameworks/Python.framework/Versions/*/bin",
+    # Node
+    "${HOME}/.nvm/versions/node/*/bin",
+    "${HOME}/.fnm/node-versions/*/installation/bin",
+    "${HOME}/.volta/bin",
+    "${HOME}/.npm-global/bin",
+    # Ruby
+    "${HOME}/.rbenv/versions/*/bin",
+    "${HOME}/.rbenv/shims",
+    "${HOME}/.rvm/rubies/*/bin",
+    # JVM
+    "${HOME}/.sdkman/candidates/*/current/bin",
+    "${HOME}/.jenv/versions/*/bin",
+    "/Library/Java/JavaVirtualMachines/*/Contents/Home/bin",
+    # Rust / Cargo
+    "${HOME}/.cargo/bin",
+    "${HOME}/.rustup/toolchains/*/bin",
+    # asdf
+    "${HOME}/.asdf/installs/*/*/bin",
+    "${HOME}/.asdf/shims",
+    # Homebrew Cellar 的所有版本
+    "/opt/homebrew/Cellar/*/*/bin",
+    "/opt/homebrew/opt/*/bin",
+    "/usr/local/Cellar/*/*/bin",
+    "/usr/local/opt/*/bin",
+    # MacPorts
+    "/opt/local/lib/*/bin",
+    # 用户常见
+    "${HOME}/.local/bin",
+    "${HOME}/bin",
+    # Conda / Mamba
+    "${HOME}/miniconda3/envs/*/bin",
+    "${HOME}/miniforge3/envs/*/bin",
+    "${HOME}/anaconda3/envs/*/bin",
+]
+
+
+def find_binary_off_path(
+    name: str,
+    in_path_set: Set[str],
+) -> List[str]:
+    """扫常见 dev-tool 安装位置，返回不在 PATH 里的同名可执行 full_path 列表。"""
+    import glob
+    home = str(Path.home())
+    out: List[str] = []
+    seen: Set[str] = set()
+    for pat in _OFFPATH_PATTERNS:
+        expanded = pat.replace("${HOME}", home)
+        for d in glob.glob(expanded):
+            if d in in_path_set:
+                continue
+            full = os.path.join(d, name)
+            if full in seen:
+                continue
+            try:
+                if os.path.isfile(full) and os.access(full, os.X_OK):
+                    out.append(full)
+                    seen.add(full)
+            except OSError:
+                pass
+    # 按真实路径分组，去掉 symlink 指向同一物的重复
+    by_real: Dict[str, str] = {}
+    for full in out:
+        try:
+            real = os.path.realpath(full)
+        except OSError:
+            real = full
+        by_real.setdefault(real, full)
+    # 保留原顺序
+    keep: List[str] = []
+    seen_real: Set[str] = set()
+    for full in out:
+        try:
+            real = os.path.realpath(full)
+        except OSError:
+            real = full
+        if real in seen_real:
+            continue
+        seen_real.add(real)
+        keep.append(full)
+    return keep
+
+
 # ---------- 渲染 ----------
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -386,26 +480,52 @@ def render_shadows(shadows: Dict[str, List[Tuple[int, str]]], limit: int = 0) ->
         )
 
 
-def render_find(name: str, matches: List[Tuple[int, str, str]]) -> int:
-    if not matches:
-        print(f"{RED}✗{RESET} 在 PATH 中找不到 {BOLD}{name}{RESET}")
+def render_find(
+    name: str,
+    matches: List[Tuple[int, str, str]],
+    off_path: List[str],
+) -> int:
+    if not matches and not off_path:
+        print(f"{RED}✗{RESET} 在 PATH 和常见安装位置都找不到 {BOLD}{name}{RESET}")
         return 1
-    print(f"{CYAN}{BOLD}{name}{RESET}  {DIM}找到 {len(matches)} 处{RESET}")
+
+    head = f"{CYAN}{BOLD}{name}{RESET}  "
+    parts = []
+    if matches:
+        parts.append(f"{DIM}PATH 中 {len(matches)} 处{RESET}")
+    if off_path:
+        parts.append(f"{YELLOW}另有 {len(off_path)} 处装着但未启用{RESET}")
+    print(head + "  ·  ".join(parts))
     print()
-    for i, (idx, full, real) in enumerate(matches):
-        if i == 0:
-            sym = f"{GREEN}✓{RESET}"
-            tag = f"{GREEN}生效{RESET}"
-            path_color = ""
-        else:
-            sym = f"{DIM}·{RESET}"
-            tag = f"{DIM}被遮{RESET}"
-            path_color = DIM
-        idx_str = f"#{idx}"
-        print(f"  {sym} {tag}  {YELLOW}{idx_str:<4}{RESET}  {path_color}{full}{RESET}")
-        if real != full:
-            real_disp = _short_home(real)
-            print(f"        {DIM}→ {real_disp}{RESET}")
+
+    if matches:
+        for i, (idx, full, real) in enumerate(matches):
+            if i == 0:
+                sym = f"{GREEN}✓{RESET}"
+                tag = f"{GREEN}生效{RESET}"
+                path_color = ""
+            else:
+                sym = f"{DIM}·{RESET}"
+                tag = f"{DIM}被遮{RESET}"
+                path_color = DIM
+            idx_str = f"#{idx}"
+            print(f"  {sym} {tag}  {YELLOW}{idx_str:<4}{RESET}  {path_color}{_short_home(full)}{RESET}")
+            if real != full:
+                print(f"        {DIM}→ {_short_home(real)}{RESET}")
+
+    if off_path:
+        if matches:
+            print()
+        print(f"  {YELLOW}未在 PATH 但已安装{RESET}  {DIM}（加进 PATH 即可启用）{RESET}")
+        for full in off_path:
+            try:
+                real = os.path.realpath(full)
+            except OSError:
+                real = full
+            full_disp = _short_home(full)
+            print(f"  {DIM}○{RESET}        {YELLOW}--{RESET}    {full_disp}")
+            if real != full:
+                print(f"        {DIM}→ {_short_home(real)}{RESET}")
     return 0
 
 
@@ -424,13 +544,17 @@ def main() -> int:
     parser.add_argument("--raw", action="store_true", help="纯文本一行一个 PATH 条目（去重去缺失），给脚本用")
     parser.add_argument("--no-source", action="store_true", help="跳过来源猜测（更快）")
     parser.add_argument("--no-count", action="store_true", help="跳过 binary 计数（更快）")
+    parser.add_argument("--no-offpath", action="store_true", help="按名查找时不扫常见安装位置")
     args = parser.parse_args()
 
     entries = parse_path()
 
     # 单 binary 查找
     if args.name:
-        return render_find(args.name, find_binary(args.name, entries))
+        in_path_set = {e.expanded for e in entries if e.exists and e.is_dir}
+        matches = find_binary(args.name, entries)
+        off_path = [] if args.no_offpath else find_binary_off_path(args.name, in_path_set)
+        return render_find(args.name, matches, off_path)
 
     # raw 输出：去重 + 跳过缺失，给 shell 用
     if args.raw:
