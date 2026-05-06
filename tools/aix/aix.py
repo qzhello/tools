@@ -297,6 +297,43 @@ def collect_rows(tools: Optional[List[str]] = None, verbose: bool = False) -> Li
     return rows
 
 
+DIM_LABEL = {
+    "day": "日期",
+    "model": "模型",
+    "project": "项目",
+    "session": "会话",
+    "tool": "数据源",
+}
+
+COL_HEADERS = {
+    "input": "输入",
+    "output": "输出",
+    "cache_read": "缓存读",
+    "cache_create": "缓存写",
+    "total": "合计",
+    "hit": "命中率",
+    "bar": "条形图",
+}
+
+
+def _disp_w(s: str) -> int:
+    """显示宽度（CJK 算 2 cells）。"""
+    w = 0
+    for ch in s:
+        w += 2 if ord(ch) > 0x2E80 else 1
+    return w
+
+
+def _rjust_w(s: str, width: int) -> str:
+    pad = width - _disp_w(s)
+    return (" " * pad if pad > 0 else "") + s
+
+
+def _ljust_w(s: str, width: int) -> str:
+    pad = width - _disp_w(s)
+    return s + (" " * pad if pad > 0 else "")
+
+
 # ---------- 聚合 ----------
 
 @dataclass
@@ -424,15 +461,16 @@ def render_table(buckets: List[Bucket], dim: str, top: int, sort: str) -> None:
     label_w = min(max(label_w, 8), 40)
     max_total = max(b.total for b in buckets) or 1
 
+    dim_label = DIM_LABEL.get(dim, dim)
     headers = [
-        f"{dim:<{label_w}}",
-        f"{'in':>8}",
-        f"{'out':>8}",
-        f"{'cache_r':>9}",
-        f"{'cache_w':>9}",
-        f"{'total':>9}",
-        f"{'hit%':>6}",
-        " bar",
+        _ljust_w(dim_label, label_w),
+        _rjust_w(COL_HEADERS["input"], 8),
+        _rjust_w(COL_HEADERS["output"], 8),
+        _rjust_w(COL_HEADERS["cache_read"], 9),
+        _rjust_w(COL_HEADERS["cache_create"], 9),
+        _rjust_w(COL_HEADERS["total"], 9),
+        _rjust_w(COL_HEADERS["hit"], 7),
+        " " + COL_HEADERS["bar"],
     ]
     print(f"{DIM}{''.join(headers)}{RESET}")
 
@@ -455,11 +493,11 @@ def render_table(buckets: List[Bucket], dim: str, top: int, sort: str) -> None:
             f"{fmt_num(b.cache_read):>9}"
             f"{fmt_num(b.cache_create):>9}"
             f"{total_color}{fmt_num(b.total):>9}{RESET}"
-            f"{hit:>6} "
+            f"{hit:>7} "
             f"{bar}"
         )
 
-    sep = "─" * (label_w + 8 + 8 + 9 + 9 + 9 + 6 + 1 + 30)
+    sep = "─" * (label_w + 8 + 8 + 9 + 9 + 9 + 7 + 1 + 30)
     print(f"{DIM}{sep}{RESET}")
     print(
         f"{BOLD}{'Σ':<{label_w}}{RESET}"
@@ -627,14 +665,14 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
     bar_w = max(10, w - cols_fixed - 2)
 
     header = (
-        f"{state.dim:<{label_w}}"
-        f"{'in':>8}"
-        f"{'out':>8}"
-        f"{'cache_r':>9}"
-        f"{'cache_w':>9}"
-        f"{'total':>9}"
-        f"{'hit%':>6}"
-        " bar"
+        _ljust_w(DIM_LABEL.get(state.dim, state.dim), label_w)
+        + _rjust_w(COL_HEADERS["input"], 8)
+        + _rjust_w(COL_HEADERS["output"], 8)
+        + _rjust_w(COL_HEADERS["cache_read"], 9)
+        + _rjust_w(COL_HEADERS["cache_create"], 9)
+        + _rjust_w(COL_HEADERS["total"], 9)
+        + _rjust_w(COL_HEADERS["hit"], 6)
+        + " " + COL_HEADERS["bar"]
     )
     _safe_addstr(win, top_y, 0, header, c["cyan"] | curses.A_BOLD)
     # 表头下方分隔线
@@ -661,10 +699,10 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
         _safe_addstr(win, y, 0, prefix)
         total_attr = _bar_pair(c, b.total, max_total) | curses.A_BOLD
         _safe_addstr(win, y, len(prefix), f"{fmt_num(b.total):>9}", total_attr)
-        hit_str = f"{b.cache_hit * 100:5.1f} "
+        hit_str = f" {b.cache_hit * 100:5.1f} "
         _safe_addstr(win, y, len(prefix) + 9, hit_str)
 
-        bar_x = len(prefix) + 9 + 6
+        bar_x = len(prefix) + 9 + 7
         ratio = b.total / max_total
         filled = int(round(ratio * bar_w))
         empty = bar_w - filled
@@ -682,7 +720,7 @@ def _draw_table(win, top_y: int, buckets: List[Bucket], grand: Bucket, state: Tu
         f"{fmt_num(grand.cache_read):>9}"
         f"{fmt_num(grand.cache_create):>9}"
         f"{fmt_num(grand.total):>9}"
-        f"{grand.cache_hit * 100:5.1f}%"
+        f" {grand.cache_hit * 100:5.1f}%"
     )
     _safe_addstr(win, sum_y, 0, sum_line, curses.A_BOLD)
 
@@ -775,8 +813,8 @@ def _draw(win, state: TuiState, c: Dict[str, int]) -> None:
     _safe_addstr(win, 0, 0, title_left, curses.A_BOLD | c["cyan"])
     _safe_addstr(win, 0, max(0, w - len(title_right) - 1), title_right, c["dim"])
 
-    # 维度 / 范围切换条
-    _draw_tabs(win, 2, "维度", DIMS, state.dim_idx, c)
+    # 维度 / 范围切换条（维度用中文显示，状态仍用英文 key）
+    _draw_tabs(win, 2, "维度", [DIM_LABEL[d] for d in DIMS], state.dim_idx, c)
     _draw_tabs(win, 3, "范围", RANGES, state.range_idx, c)
 
     # 数据表
