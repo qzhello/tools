@@ -387,9 +387,11 @@ def severity_color(level: str) -> str:
 class Verdict:
     name: str          # CPU / 内存 / 网络 / 磁盘 / 电池
     level: str         # ok / warn / high
-    headline: str      # 一句话主指标
+    headline: str      # 一句话主指标（旧字段，弃用方向）
     detail: str        # top 消耗者
     score: float = 0.0 # 用于排序谁是最大瓶颈
+    primary: str = ""  # 主数字，右对齐 7 cell（如 "100%" / "8.6M/s" / "63.0G"）
+    suffix: str = ""   # 后置详情（如 "63.0G / 63.1G  swap 9.5G"）
 
 
 def assess_cpu(snap: TopSnap, hw: HwInfo) -> Verdict:
@@ -400,35 +402,33 @@ def assess_cpu(snap: TopSnap, hw: HwInfo) -> Verdict:
         level = "warn"
     else:
         level = "ok"
-    headline = f"{used:.0f}%  ({snap.cpu_user:.0f}% 用户 + {snap.cpu_sys:.0f}% 系统)"
+    primary = f"{used:.0f}%"
+    suffix_parts = [f"用户 {snap.cpu_user:.0f}% / 系统 {snap.cpu_sys:.0f}%"]
     if hw.ncpu:
-        headline += f"  ·  {hw.ncpu} 核"
-    top3 = sorted(snap.procs, key=lambda p: -p.cpu)[:3]
-    top3 = [p for p in top3 if p.cpu > 0.5]
-    detail = "  ".join(f"{p.name} {p.cpu:.0f}%" for p in top3) if top3 else "(空闲)"
-    return Verdict("CPU", level, headline, detail, score=used)
+        suffix_parts.append(f"{hw.ncpu} 核")
+    suffix = "  ·  ".join(suffix_parts)
+    headline = f"{primary}  {suffix}"
+    return Verdict("CPU", level, headline, "", score=used, primary=primary, suffix=suffix)
 
 
 def assess_mem(snap: TopSnap, vm: Dict[str, int], swap_used: int, swap_total: int) -> Verdict:
     if not snap.phys_total_b:
         return Verdict("内存", "ok", "无数据", "")
     used_pct = snap.phys_used_b / snap.phys_total_b * 100
-    # 内存压力：compressor + swap 使用都算
     swap_g = swap_used / 1024**3
-    pressure_high = swap_g > 1 or used_pct >= 90
-    if pressure_high:
+    if swap_g > 1 or used_pct >= 90:
         level = "high"
     elif used_pct >= 75 or swap_g > 0.1:
         level = "warn"
     else:
         level = "ok"
-    headline = f"{fmt_bytes(snap.phys_used_b)} / {fmt_bytes(snap.phys_total_b)}  ({used_pct:.0f}%)"
+    primary = f"{used_pct:.0f}%"
+    suffix_parts = [f"{fmt_bytes(snap.phys_used_b)} / {fmt_bytes(snap.phys_total_b)}"]
     if swap_g > 0.05:
-        headline += f"  ·  swap {fmt_bytes(swap_used)}"
-    top3 = sorted(snap.procs, key=lambda p: -p.mem_kb)[:3]
-    detail = "  ".join(f"{p.name} {fmt_bytes(p.mem_kb * 1024)}" for p in top3) if top3 else ""
-    score = used_pct + (swap_g * 10)  # swap 加权
-    return Verdict("内存", level, headline, detail, score=score)
+        suffix_parts.append(f"swap {fmt_bytes(swap_used)}")
+    suffix = "  ·  ".join(suffix_parts)
+    score = used_pct + (swap_g * 10)
+    return Verdict("内存", level, "", "", score=score, primary=primary, suffix=suffix)
 
 
 def assess_net(snap: NetSnap) -> Verdict:
@@ -440,9 +440,9 @@ def assess_net(snap: NetSnap) -> Verdict:
         level = "warn"
     else:
         level = "ok"
-    headline = f"↓ {fmt_bytes(snap.in_bps, True)}  ↑ {fmt_bytes(snap.out_bps, True)}"
-    detail = ""  # macOS 上拿 per-process 网络要 sudo nettop，跳过
-    return Verdict("网络", level, headline, detail, score=mb)
+    primary = fmt_bytes(total, per_sec=True)
+    suffix = f"↓ {fmt_bytes(snap.in_bps, True)}  ·  ↑ {fmt_bytes(snap.out_bps, True)}"
+    return Verdict("网络", level, "", "", score=mb, primary=primary, suffix=suffix)
 
 
 def assess_disk(snap: DiskSnap) -> Verdict:
@@ -453,31 +453,32 @@ def assess_disk(snap: DiskSnap) -> Verdict:
         level = "warn"
     else:
         level = "ok"
-    headline = f"{fmt_bytes(snap.bps, True)}"
-    return Verdict("磁盘", level, headline, "", score=mb / 5)  # disk 权重小一点
+    primary = fmt_bytes(snap.bps, per_sec=True)
+    return Verdict("磁盘", level, "", "", score=mb / 5, primary=primary, suffix="")
 
 
 def assess_battery(snap: Optional[BatterySnap]) -> Optional[Verdict]:
     if snap is None or snap.pct == 0:
         return None
+    primary = f"{snap.pct}%"
     if snap.on_battery:
         if snap.pct < 15:
             level = "high"
-            headline = f"{snap.pct}%  ·  电池供电  ·  剩 {snap.time_left or '?'}  ·  耗 {snap.discharge_w:.0f}W"
+            suffix = f"电池供电  ·  剩 {snap.time_left or '?'}  ·  耗 {snap.discharge_w:.0f}W"
         elif snap.discharge_w > 25:
             level = "warn"
-            headline = f"{snap.pct}%  ·  电池供电  ·  耗 {snap.discharge_w:.0f}W (高)"
+            suffix = f"电池供电  ·  耗 {snap.discharge_w:.0f}W (高)"
         else:
             level = "ok"
-            headline = f"{snap.pct}%  ·  电池供电  ·  耗 {snap.discharge_w:.0f}W  ·  剩 {snap.time_left or '估算中'}"
+            suffix = f"电池供电  ·  耗 {snap.discharge_w:.0f}W  ·  剩 {snap.time_left or '估算中'}"
     else:
         if snap.state == "charged":
             level = "ok"
-            headline = f"{snap.pct}%  ·  AC 已充满"
+            suffix = "AC 已充满"
         else:
             level = "ok"
-            headline = f"{snap.pct}%  ·  AC 充电中"
-    return Verdict("电池", level, headline, "", score=0)
+            suffix = "AC 充电中"
+    return Verdict("电池", level, "", "", score=0, primary=primary, suffix=suffix)
 
 
 # ---------- 渲染 ----------
@@ -498,6 +499,11 @@ def _ljust_w(s: str, width: int) -> str:
     return s + (" " * pad if pad > 0 else "")
 
 
+def _rjust_w(s: str, width: int) -> str:
+    pad = width - _disp_w(s)
+    return (" " * pad if pad > 0 else "") + s
+
+
 _BAR_FILL = "█"
 _BAR_EMPTY = "░"
 # 亚像素：1/8 步进
@@ -512,7 +518,9 @@ def _bar(ratio: float, width: int, color: str = "") -> str:
     cells = ratio * width
     full = int(cells)
     frac = cells - full
-    partial = _BAR_PARTIALS[int(frac * 8)] if frac > 0 and full < width else ""
+    p_idx = int(frac * 8) if frac > 0 and full < width else 0
+    # _BAR_PARTIALS[0] 是空格，会变成隐形「假填充」让 bar 整体右移；只在 idx>=1 时用
+    partial = _BAR_PARTIALS[p_idx] if p_idx >= 1 else ""
     empty_w = width - full - (1 if partial else 0)
     out = color + _BAR_FILL * full + partial + RESET
     out += DIM + _BAR_EMPTY * empty_w + RESET
@@ -572,81 +580,73 @@ def render(
     bat: Optional["BatterySnap"],
     history: Optional[Dict[str, List[float]]] = None,
 ) -> None:
-    # 头部
-    title = f"{BOLD}{CYAN}loadx{RESET}"
-    if hw.model:
-        title += f"  {DIM}{hw.model}{RESET}"
-    print(title)
-
-    # 一句话结论
+    # 头部：左侧标题，右侧瓶颈结论
     candidates = [v for v in verdicts if v.level != "ok"]
+    title_left = f"{BOLD}{CYAN}loadx{RESET}"
+    if hw.model:
+        title_left += f"  {DIM}{hw.model}{RESET}"
     if candidates:
         worst = max(candidates, key=lambda v: v.score)
-        color = _level_color(worst.level)
-        sym = _level_sym(worst.level)
-        print(f"\n{BOLD}瓶颈{RESET}  {color}{sym} {worst.name}{RESET}  {worst.headline}")
+        c = _level_color(worst.level)
+        s = _level_sym(worst.level)
+        right = f"{c}{s} 瓶颈 {worst.name}{RESET}"
     else:
-        print(f"\n{GREEN}✓ 整体健康，没看到瓶颈{RESET}")
+        right = f"{GREEN}✓ 整体健康{RESET}"
+    print(f"{title_left}    {right}")
     print()
 
+    # 各项主指标
     name_w = max(_disp_w(v.name) for v in verdicts)
-    bar_w = 30
-    proc_bar_w = 20
-    proc_name_w = 18
+    bar_w = 28
+    SPARK_W = 10
 
     for v in verdicts:
         color = _level_color(v.level)
-        sym = _level_sym(v.level)
         name_padded = _ljust_w(v.name, name_w)
-
-        # 主条按指标定制（堆叠/普通）
         bar = _main_bar(v, snap, net, disk, bat, swap_used, bar_w)
 
-        # sparkline 固定宽度：保留区永远占 SPARK_W 个 cell，避免推动右侧文字
-        SPARK_W = 12
-        spark_text = ""
+        spark_padded = " " * SPARK_W
         if history:
             key_map = {"CPU": "cpu", "内存": "mem", "网络": "net", "磁盘": "disk", "电池": "bat"}
             key = key_map.get(v.name)
             if key and history.get(key) and len(history[key]) >= 1:
                 vals = history[key][-SPARK_W:]
-                spark_text = _sparkline(vals, 1.0)
-        spark_padded = spark_text.rjust(SPARK_W)
-        spark = f"  {color}{spark_padded}{RESET}" if history else ""
+                spark_padded = _sparkline(vals, 1.0).rjust(SPARK_W)
+        spark = f"{color}{spark_padded}{RESET}"
 
-        print(f"  {color}{sym}{RESET}  {BOLD}{name_padded}{RESET}  {bar}{spark}  {v.headline}")
+        # 指标名本身着色（避免 ✓⚠✗ 在不同终端 1cell/2cell 不一致导致错位）
+        primary = v.primary or v.headline
+        primary_colored = f"{color}{BOLD}{primary}{RESET}"
+        primary_padded = _rjust_w(primary_colored, 8)
+        suffix = f"{DIM}{v.suffix}{RESET}" if v.suffix else ""
+        print(f"  {color}{BOLD}{name_padded}{RESET}  {bar}  {spark}   {primary_padded}   {suffix}")
 
-        # 内存的图例
-        if v.name == "内存" and snap.phys_total_b:
-            wired = snap.wired_b / snap.phys_total_b
-            comp = snap.compressor_b / snap.phys_total_b
-            other = max(0, (snap.phys_used_b - snap.wired_b - snap.compressor_b) / snap.phys_total_b)
-            free = snap.phys_unused_b / snap.phys_total_b
-            legend = (
-                f"{RED}■{RESET} 内核 {wired*100:.0f}%  "
-                f"{YELLOW}■{RESET} 压缩 {comp*100:.0f}%  "
-                f"{CYAN}■{RESET} 应用 {other*100:.0f}%  "
-                f"{DIM}■ 空闲 {free*100:.0f}%{RESET}"
-            )
-            print(f"     {' ' * name_w}  {legend}")
+    # Top 消费者：CPU / 内存 左右两列
+    cpu_top = [p for p in sorted(snap.procs, key=lambda p: -p.cpu) if p.cpu > 0.5][:5]
+    mem_top = [p for p in sorted(snap.procs, key=lambda p: -p.mem_kb) if p.mem_kb > 0][:5]
+    if cpu_top or mem_top:
+        print()
+        col_w = 38
+        # 左 + 右 标题
+        left_title = f"{DIM}CPU 占用{RESET}"
+        right_title = f"{DIM}内存 占用{RESET}"
+        print(f"  {_ljust_w(left_title, col_w)}{right_title}")
 
-        # Top 3 进程子条
-        if v.name == "CPU":
-            top = sorted(snap.procs, key=lambda p: -p.cpu)[:3]
-            top = [p for p in top if p.cpu > 0.5]
-            for p in top:
-                pname = _ljust_w(_short_name(p.name, proc_name_w), proc_name_w)
-                pbar = _bar(p.cpu / 100, proc_bar_w, _proc_color(p.cpu, 80, 30))
-                print(f"     {' ' * name_w}  {DIM}▏{RESET} {pname} {pbar}  {p.cpu:.0f}%")
-        elif v.name == "内存" and snap.phys_total_b:
-            top = sorted(snap.procs, key=lambda p: -p.mem_kb)[:3]
-            top = [p for p in top if p.mem_kb > 0]
-            max_mem = top[0].mem_kb * 1024 if top else 1
-            for p in top:
-                mb = p.mem_kb * 1024
-                pname = _ljust_w(_short_name(p.name, proc_name_w), proc_name_w)
-                pbar = _bar(mb / max_mem, proc_bar_w, MAG)
-                print(f"     {' ' * name_w}  {DIM}▏{RESET} {pname} {pbar}  {fmt_bytes(mb)}")
+        rows = max(len(cpu_top), len(mem_top))
+        for i in range(rows):
+            left = ""
+            if i < len(cpu_top):
+                p = cpu_top[i]
+                pcolor = _proc_color(p.cpu, 80, 30)
+                left = f"{_ljust_w(_short_name(p.name, 22), 22)}  {pcolor}{p.cpu:>5.1f}%{RESET}"
+            else:
+                left = ""
+            right = ""
+            if i < len(mem_top):
+                p = mem_top[i]
+                size = fmt_bytes(p.mem_kb * 1024)
+                right = f"{_ljust_w(_short_name(p.name, 22), 22)}  {MAG}{size:>6}{RESET}"
+            print(f"  {_ljust_w(left, col_w)}{right}")
 
     # 建议
     tips = _suggest(verdicts)
