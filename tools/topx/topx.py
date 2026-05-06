@@ -241,6 +241,7 @@ class State:
         self.flash_until = 0.0
         self.last_proc_t = 0.0
         self.proc_interval = 2.0  # 进程列表每 2s 刷新一次（ps 较慢）
+        self.quad_pct = 50        # 4 象限占总高度的百分比（运行时可调）
 
     def update_sys(self, raw: Dict) -> None:
         """更新 CPU / 内存（来自 top -l 1）。"""
@@ -596,7 +597,7 @@ def draw_footer(stdscr, h: int, w: int, st: State) -> None:
                      curses.A_REVERSE | col("yellow"))
         return
     help_line = (
-        " q:退出  Space:暂停  ↑↓:选择  PgUp/Dn:翻页  K:杀  c/m/p/t:排序  /:过滤  ?:帮助 "
+        " q:退出  Space:暂停  ↑↓:选择  K:杀  c/m/p/t:排序  /:过滤  +/-:象限大小  ?:帮助 "
     )
     safe_addnstr(stdscr, h - 1, 0, help_line, w - 1, curses.A_DIM)
 
@@ -618,6 +619,7 @@ def draw_help(stdscr) -> None:
         "  t             按运行时长排序",
         "  /             进入过滤模式（直接输入字符）",
         "  Esc           过滤态下清空过滤",
+        "  + / -         调整 4 象限占比（5% 步长，20%–80%）",
         "  ?             显示 / 隐藏本帮助",
         "",
         " 数据源：top -l 1 + ps（macOS 自带）",
@@ -759,6 +761,8 @@ def tui_main(stdscr, args) -> None:
     init_colors()
 
     st = State()
+    # 应用 CLI 默认值
+    st.quad_pct = max(20, min(80, args.quad_pct))
 
     # 启动后台采集线程
     stop = threading.Event()
@@ -805,8 +809,16 @@ def _run_event_loop(stdscr, st: State) -> None:
 
         stdscr.erase()
 
-        # 4 象限：每个 5 行高
-        panel_h = 5
+        # 4 象限高度根据 quad_pct 动态计算
+        # 可用高度 = 总高 - 标题(1) - 页脚(1)
+        usable_h = max(8, h - 2)
+        quad_total_h = max(8, usable_h * st.quad_pct // 100)
+        # 单个象限至少 4 行；进程列表至少 4 行
+        panel_h = max(4, quad_total_h // 2)
+        # 如果 panel_h × 2 + 进程区 < 可用高度，约束以保留进程区 ≥ 4
+        if usable_h - 2 * panel_h < 4:
+            panel_h = max(4, (usable_h - 4) // 2)
+
         panel_w = w // 2
         right_w = w - panel_w
 
@@ -871,6 +883,12 @@ def _run_event_loop(stdscr, st: State) -> None:
         elif ch == ord("K"):
             kill_selected(stdscr, st)
             # 进程列表会在下一轮自动刷新
+        elif ch in (ord("+"), ord("=")):
+            st.quad_pct = min(80, st.quad_pct + 5)
+            st.set_flash(f"四象限占比 {st.quad_pct}%")
+        elif ch in (ord("-"), ord("_")):
+            st.quad_pct = max(20, st.quad_pct - 5)
+            st.set_flash(f"四象限占比 {st.quad_pct}%")
         elif ch == ord("?"):
             st.show_help = True
 
@@ -882,6 +900,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("-i", "--interval", type=float, default=1.0,
                    help="系统数据刷新间隔秒数（默认 1.0）")
+    p.add_argument("-Q", "--quad-pct", type=int, default=50,
+                   help="4 象限占总高度的百分比（默认 50；运行时按 + / - 调整）")
     return p
 
 
