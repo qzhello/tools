@@ -201,39 +201,61 @@ class NetSnap:
 
 
 def sample_net(interval: float = 1.0) -> NetSnap:
-    """两次 netstat -ib 取差，跳过 lo*。"""
-    def _read() -> Tuple[int, int]:
+    """两次 netstat -ib 取差。**按 interface 分别求差**，避免接口新增/重启时
+    把整个生命周期累计当作 1s 流量；单接口异常大的 delta 也直接丢弃。"""
+    def _read() -> Dict[str, Tuple[int, int]]:
         try:
             out = subprocess.run(
                 ["netstat", "-ib"], capture_output=True, check=False, timeout=3,
             ).stdout.decode("utf-8", errors="replace")
         except (FileNotFoundError, subprocess.TimeoutExpired):
-            return (0, 0)
-        seen: set = set()
-        in_b = out_b = 0
+            return {}
+        seen: Dict[str, Tuple[int, int]] = {}
         for line in out.splitlines()[1:]:
             cols = line.split()
             if len(cols) < 10:
                 continue
-            name, mtu, network = cols[0], cols[1], cols[2]
+            name, _mtu, network = cols[0], cols[1], cols[2]
             if name in seen or name.startswith("lo"):
                 continue
+            # 仅取链路级行（每个接口的第一行）；避免 IPv4 / IPv6 别名行重复计数
             if not network.startswith("<Link"):
                 continue
-            seen.add(name)
+            # Link 行有时没有 MAC 地址（比如 utun*），列就少一列。简单识别：
+            # 如果 cols[3] 不是 MAC 形式（不含冒号且不是数字），按 9 列布局；否则 10 列
             try:
-                in_b += int(cols[6])
-                out_b += int(cols[9])
+                if ":" in cols[3] or cols[3].count("-") >= 2:
+                    # 有 Address：Ibytes=cols[6] Obytes=cols[9]
+                    in_b = int(cols[6]); out_b = int(cols[9])
+                else:
+                    # 无 Address：Ibytes=cols[5] Obytes=cols[8]
+                    in_b = int(cols[5]); out_b = int(cols[8])
             except (ValueError, IndexError):
-                pass
-        return (in_b, out_b)
+                continue
+            seen[name] = (in_b, out_b)
+        return seen
 
-    a_in, a_out = _read()
+    a = _read()
     time.sleep(interval)
-    b_in, b_out = _read()
+    b = _read()
+
+    # 单接口最大合理 delta：80Gbps = 10 GB/s，按 interval 放宽；超过认为是新启动/计数器重置
+    max_delta = int(10 * 1024**3 * interval)
+
+    in_total = out_total = 0
+    for name in set(a) & set(b):  # 只算两次都出现的接口
+        a_in, a_out = a[name]
+        b_in, b_out = b[name]
+        d_in = b_in - a_in
+        d_out = b_out - a_out
+        if 0 <= d_in <= max_delta:
+            in_total += d_in
+        if 0 <= d_out <= max_delta:
+            out_total += d_out
+
     snap = NetSnap()
-    snap.in_bps = max(0, b_in - a_in) / interval
-    snap.out_bps = max(0, b_out - a_out) / interval
+    snap.in_bps = in_total / interval
+    snap.out_bps = out_total / interval
     return snap
 
 
