@@ -626,7 +626,9 @@ def draw_help(stdscr) -> None:
         "",
         " 任意键关闭",
     ]
-    bw = max(len(l) for l in lines) + 4
+    # 用显示宽度计算（中文字符 = 2 列）
+    content_w = max(disp_w(l) for l in lines)
+    bw = content_w + 4   # "│ " + content + " │"
     bh = len(lines) + 2
     by = max(0, (h - bh) // 2)
     bx = max(0, (w - bw) // 2)
@@ -635,7 +637,8 @@ def draw_help(stdscr) -> None:
         safe_addstr(stdscr, by + i, bx, " " * bw, curses.A_REVERSE)
     safe_addstr(stdscr, by, bx, "┌" + "─" * (bw - 2) + "┐", curses.A_REVERSE | col("cyan"))
     for i, line in enumerate(lines):
-        safe_addstr(stdscr, by + 1 + i, bx, "│ " + line.ljust(bw - 4) + " │",
+        padded = line + " " * max(0, content_w - disp_w(line))
+        safe_addstr(stdscr, by + 1 + i, bx, "│ " + padded + " │",
                     curses.A_REVERSE)
     safe_addstr(stdscr, by + bh - 1, bx, "└" + "─" * (bw - 2) + "┘",
                 curses.A_REVERSE | col("cyan"))
