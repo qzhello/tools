@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Tuple
 
 _USE_COLOR = (
     not os.environ.get("NO_COLOR")
-    and (os.environ.get("PORTS_FORCE_COLOR") or sys.stdout.isatty())
+    and (os.environ.get("PORTX_FORCE_COLOR") or sys.stdout.isatty())
 )
 
 
@@ -268,7 +268,7 @@ def cmd_kill(entries: List[Dict], assume_yes: bool) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="ports",
+        prog="portx",
         description="列出本机监听端口（TCP+UDP），支持过滤与杀进程",
     )
     p.add_argument("filter", nargs="?", default=None,

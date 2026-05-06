@@ -1,5 +1,5 @@
 #!/bin/bash
-# ports - 列出监听端口 + 进程，识别常见服务，支持 -k 杀进程
+# portx - 列出本机监听端口 + 进程，识别常见服务，支持 -k 杀进程
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
@@ -13,14 +13,14 @@ while [[ -L "$_resolve" ]]; do
     [[ "$_link" = /* ]] && _resolve="$_link" || _resolve="$_dir/$_link"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$_resolve")" && pwd)"
-PORTS_PY="$SCRIPT_DIR/ports.py"
+PORTX_PY="$SCRIPT_DIR/portx.py"
 
 command -v python3 &>/dev/null || { printf '✗ 找不到 python3\n' >&2; exit 1; }
 command -v lsof    &>/dev/null || { printf '✗ 找不到 lsof\n'    >&2; exit 1; }
-[[ -f "$PORTS_PY" ]] || { printf '✗ 找不到 %s\n' "$PORTS_PY" >&2; exit 1; }
+[[ -f "$PORTX_PY" ]] || { printf '✗ 找不到 %s\n' "$PORTX_PY" >&2; exit 1; }
 
 if [[ -t 1 ]]; then
-    export PORTS_FORCE_COLOR=1
+    export PORTX_FORCE_COLOR=1
 fi
 
-exec python3 "$PORTS_PY" "$@"
+exec python3 "$PORTX_PY" "$@"

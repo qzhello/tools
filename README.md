@@ -37,7 +37,7 @@ python3 --version    # 检查；< 3.9 请升级
 | pingx     | `ping`                       | 自带 | 自带       |
 | tracex    | `traceroute`                 | 自带 | `apt install traceroute` |
 | dnsx      | `dig`                        | 自带 | `apt install dnsutils` |
-| ports     | `lsof`                       | 自带 | `apt install lsof` |
+| portx     | `lsof`                       | 自带 | `apt install lsof` |
 | sizex     | （无）                       | -     | -          |
 | procx     | `ps`                         | 自带 | 自带       |
 | certx     | `openssl`                    | 自带 | `apt install openssl` |
@@ -138,7 +138,7 @@ cd tools
 | [pingx](tools/pingx/)         | 实时可视化 ping，sparkline 折线 + 丢包率 + min/avg/p95/max 统计 |
 | [tracex](tools/tracex/)       | 可视化路由追踪（mtr 风格），按跳显示丢包率 + 延迟 sparkline |
 | [dnsx](tools/dnsx/)           | 多 DNS resolver 并行查询对比，差异高亮，排查 CDN/污染/未生效 |
-| [ports](tools/ports/)         | 列出本机监听端口 + 进程，识别常见服务，支持 `-k` 杀进程 |
+| [portx](tools/portx/)         | 列出本机监听端口 + 进程，识别常见服务，支持 `-k` 杀进程 |
 | [sizex](tools/sizex/)         | 目录大小可视化，条形图，按大小排序，找谁吃了硬盘 |
 | [procx](tools/procx/)         | 进程查看器，按 CPU/内存排序，颜色高亮，支持进程树和 `-k` 杀进程 |
 | [certx](tools/certx/)         | HTTPS 证书检查，到期天数高亮，SAN/链/TLS 版本一览 |
