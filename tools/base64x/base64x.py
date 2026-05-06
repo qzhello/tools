@@ -19,7 +19,7 @@ from typing import Optional, Tuple
 
 _USE_COLOR = (
     not os.environ.get("NO_COLOR")
-    and (os.environ.get("B64_FORCE_COLOR") or sys.stdout.isatty())
+    and (os.environ.get("BASE64X_FORCE_COLOR") or sys.stdout.isatty())
 )
 
 
@@ -239,7 +239,7 @@ def _truncate(s: str, w: int) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="b64",
+        prog="base64x",
         description="base64 双向自动识别（默认自动判断方向）",
     )
     p.add_argument("input", nargs="*", help="要处理的字符串；不传则读 stdin / -c 剪贴板 / -i 文件")

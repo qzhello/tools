@@ -41,9 +41,9 @@ python3 --version    # 检查；< 3.9 请升级
 | sizex     | （无）                       | -     | -          |
 | procx     | `ps`                         | 自带 | 自带       |
 | certx     | `openssl`                    | 自带 | `apt install openssl` |
-| b64       | `pbcopy`/`pbpaste`（仅剪贴板模式）| 自带 | 剪贴板模式需 `xclip` 或 `wl-copy`（当前仅 macOS 支持） |
+| base64x   | `pbcopy`/`pbpaste`（仅剪贴板模式）| 自带 | 剪贴板模式需 `xclip` 或 `wl-copy`（当前仅 macOS 支持） |
 | topx      | `top`, `ps`, `netstat`, `iostat` | 自带 | `apt install net-tools sysstat` |
-| myip      | `ifconfig`, `route`/`ip`, `scutil`（mac） | 自带 | `apt install net-tools iproute2` |
+| ipx       | `ifconfig`, `route`/`ip`, `scutil`（mac） | 自带 | `apt install net-tools iproute2` |
 | aix       | （无；读 `~/.claude/projects/`） | -     | -          |
 
 ### 一键安装前置（参考）
@@ -109,7 +109,7 @@ cd tools
 ```
 可用工具（共 12 个，已安装 9）
 
-✓ b64        base64 双向自动识别，支持 url-safe / 文件 / 剪贴板进出
+✓ base64x    base64 双向自动识别，支持 url-safe / 文件 / 剪贴板进出
 ✓ certx      HTTPS 证书检查，到期天数 + SAN + 链 + TLS 版本
 - dnsx       多 resolver DNS 对比查询，差异高亮（CDN/污染/未生效排查）
 ✓ datex      时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳
@@ -142,9 +142,9 @@ cd tools
 | [sizex](tools/sizex/)         | 目录大小可视化，条形图，按大小排序，找谁吃了硬盘 |
 | [procx](tools/procx/)         | 进程查看器，按 CPU/内存排序，颜色高亮，支持进程树和 `-k` 杀进程 |
 | [certx](tools/certx/)         | HTTPS 证书检查，到期天数高亮，SAN/链/TLS 版本一览 |
-| [b64](tools/b64/)             | base64 双向自动识别，支持 url-safe、文件、剪贴板进出 |
+| [base64x](tools/base64x/)     | base64 双向自动识别，支持 url-safe、文件、剪贴板进出 |
 | [topx](tools/topx/)           | 简洁的系统监控 TUI，4 象限（CPU/MEM/NET/DISK）+ 进程列表，单键交互 |
-| [myip](tools/myip/)           | 多源公网 IP + ISP/地理位置对比，本机网卡 v4/v6、默认网关、DNS 一览 |
+| [ipx](tools/ipx/)             | 多源公网 IP + ISP/地理位置对比，本机网卡 v4/v6、默认网关、DNS 一览 |
 | [aix](tools/aix/)             | Claude Code + Codex token 用量统计，TUI 交互，按天/模型/项目/会话/源聚合 |
 
 ## 如何添加新工具

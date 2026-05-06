@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""myip - 公网 IP + ISP + 地理位置 + 本机各网卡 IP。
+"""ipx - 公网 IP + ISP + 地理位置 + 本机各网卡 IP。
 
 并行查询多个公网 IP 服务，结果不一致时高亮（可能走了不同出口或被劫持）。
 然后列出本机活动网卡的 v4/v6、默认网关、DNS。
@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 _USE_COLOR = (
     not os.environ.get("NO_COLOR")
-    and (os.environ.get("MYIP_FORCE_COLOR") or sys.stdout.isatty())
+    and (os.environ.get("IPX_FORCE_COLOR") or sys.stdout.isatty())
 )
 
 
@@ -76,7 +76,7 @@ class IpResult:
 
 
 def _http_get(url: str, timeout: float) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": "myip/1.0", "Accept": "application/json"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ipx/1.0", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (trusted hosts)
         data = resp.read()
         return data.decode("utf-8", errors="replace").strip()
@@ -375,7 +375,7 @@ def render_local(ifaces: List[LocalIface], gateway: Optional[str], dns: List[str
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="myip",
+        prog="ipx",
         description="公网 IP（多源对比）+ 本机网卡 + 网关 + DNS",
     )
     parser.add_argument("-4", "--v4-only", action="store_true", help="只查 IPv4")
