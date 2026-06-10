@@ -1,0 +1,11 @@
+tools/ssh-alias/ssh-alias.sh
+  ai_agent 72-73
+tools/ssh-alias/README.md
+  ai_agent 67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "497fe62eb7ee0a6d50d0e91208adf99c68eebd2c",
+  "prompts": {}
+}
