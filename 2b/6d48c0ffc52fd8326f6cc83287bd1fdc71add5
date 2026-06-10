@@ -1,0 +1,9 @@
+tools/ssh-alias/ssh-alias.sh
+  ai_agent 77-112,128-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.3",
+  "base_commit_sha": "2b6d48c0ffc52fd8326f6cc83287bd1fdc71add5",
+  "prompts": {}
+}
