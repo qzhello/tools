@@ -33,7 +33,8 @@ python3 --version    # check; upgrade if < 3.9
 
 | Tool | Required Commands | macOS | Linux Install |
 |------|------------------|-------|---------------|
-| ssh-alias | `ssh`, `security` (Keychain) | built-in | `apt install openssh-client` (password mode unavailable: depends on macOS Keychain) |
+| ssh-alias | `ssh`, `security` (Keychain); TOTP mode needs `oathtool`+`expect` | built-in (oathtool: `brew install oath-toolkit`) | `apt install openssh-client` (password/TOTP modes unavailable: depend on macOS Keychain) |
+| cmd-alias | (none; Tab expansion requires zsh) | built-in | `a` function works, Tab expansion requires zsh |
 | jsonx     | `pbcopy`/`pbpaste`           | built-in | clipboard mode unavailable |
 | datex     | (none; clipboard mode needs `pbpaste`) | built-in | clipboard mode unavailable |
 | pingx     | `ping`                       | built-in | built-in |
@@ -136,7 +137,8 @@ To complete English translations, edit the `MSG_en_*` variables at the top of `i
 
 | Tool | Description |
 |------|-------------|
-| [ssh-alias](tools/ssh-alias/) | SSH quick login manager, key-based / password login (password encrypted in macOS Keychain) |
+| [ssh-alias](tools/ssh-alias/) | SSH quick login manager: key-based / password / password+TOTP 2FA auto-login (credentials encrypted in macOS Keychain), ControlMaster connection reuse |
+| [cmd-alias](tools/cmd-alias/) | Shell command shortcuts (entry: `a`): register with `a add cc "<long command>"`, run with `a cc`; in zsh, `a <prefix>` + Tab expands/cycles matching history commands inline |
 | [jsonx](tools/jsonx/)         | JSON pretty print, output to both stdout and clipboard, supports args / pipe / clipboard / file / directory |
 | [datex](tools/datex/)         | Timestamp ↔ date bidirectional conversion, auto-detect 10/13/16/19-digit timestamps, multi-format output |
 | [pingx](tools/pingx/)         | Real-time visual ping, sparkline + packet loss + min/avg/p95/max stats |

@@ -33,7 +33,8 @@ python3 --version    # 检查；< 3.9 请升级
 
 | 工具 | 依赖的系统命令 | macOS | Linux 安装 |
 |------|---------------|-------|-----------|
-| ssh-alias | `ssh`, `security`(Keychain) | 自带 | `apt install openssh-client`（密码模式不可用：依赖 macOS Keychain） |
+| ssh-alias | `ssh`, `security`(Keychain)；TOTP 模式需 `oathtool`+`expect` | 自带（oathtool 需 `brew install oath-toolkit`） | `apt install openssh-client`（密码/TOTP 模式不可用：依赖 macOS Keychain） |
+| cmd-alias | （无；Tab 展开需 zsh）        | 自带 | `a` 函数可用，Tab 展开需 zsh |
 | jsonx     | `pbcopy`/`pbpaste`           | 自带 | 剪贴板模式不可用 |
 | datex     | （无；剪贴板模式需 `pbpaste`） | 自带 | 剪贴板模式不可用 |
 | pingx     | `ping`                       | 自带 | 自带       |
@@ -136,7 +137,8 @@ cd tools
 
 | 工具 | 说明 |
 |------|------|
-| [ssh-alias](tools/ssh-alias/) | SSH 快捷登录管理，密钥免密 / 密码登录（密码加密存于 macOS Keychain） |
+| [ssh-alias](tools/ssh-alias/) | SSH 快捷登录管理，密钥免密 / 密码 / 密码+TOTP 两步验证自动登录（凭据加密存于 macOS Keychain），ControlMaster 连接复用 |
+| [cmd-alias](tools/cmd-alias/) | 常用命令快捷别名（入口 `a`），`a add cc "<长命令>"` 注册后 `a cc` 直接执行；zsh 下 `a <前缀>` + Tab 行内展开/循环匹配历史命令 |
 | [jsonx](tools/jsonx/)         | JSON 美化，结果同时打到 stdout 和剪贴板，支持参数 / 管道 / 剪贴板 / 文件 / 目录 |
 | [datex](tools/datex/)         | 时间戳 ↔ 日期双向转换，自动识别 10/13/16/19 位时间戳，一次输出多种格式 |
 | [pingx](tools/pingx/)         | 实时可视化 ping，sparkline 折线 + 丢包率 + min/avg/p95/max 统计 |
