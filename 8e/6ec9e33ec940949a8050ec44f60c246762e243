@@ -1,0 +1,19 @@
+tools/ssh-alias/README.md
+  s_3263c83d37588c::t_809f61b164827f 5,8-10,41-55,58,60,64-65,68,81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "8e6ec9e33ec940949a8050ec44f60c246762e243",
+  "prompts": {},
+  "sessions": {
+    "s_3263c83d37588c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "61e558cc-4a95-499a-9300-638638e731fd",
+        "model": "unknown"
+      },
+      "human_author": "qzhello <951012707@qq.com>"
+    }
+  }
+}
