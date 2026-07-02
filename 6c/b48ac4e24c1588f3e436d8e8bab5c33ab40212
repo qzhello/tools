@@ -1,0 +1,27 @@
+README.en.md
+  s_3263c83d37588c::t_41443badf1342a 36-37,140-141
+README.md
+  s_3263c83d37588c::t_e8791a071e55c8 36-37,140-141
+tools/cmd-alias/README.md
+  s_3263c83d37588c::t_3bae0baca93bdb 1-57
+tools/cmd-alias/cmd-alias.sh
+  s_3263c83d37588c::t_bad3d2ff93d2db 1-116
+tools/cmd-alias/source.sh
+  s_3263c83d37588c::t_03afa41b956655 1-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "6cb48ac4e24c1588f3e436d8e8bab5c33ab40212",
+  "prompts": {},
+  "sessions": {
+    "s_3263c83d37588c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "61e558cc-4a95-499a-9300-638638e731fd",
+        "model": "unknown"
+      },
+      "human_author": "qzhello <951012707@qq.com>"
+    }
+  }
+}
